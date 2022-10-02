@@ -1,27 +1,27 @@
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
-use std::fmt::{self, Display, Write};
-use std::mem::swap;
-use std::ops::{Add, Mul, Neg};
+use std::fmt::{self, Debug, Display, Write};
+use std::ops::{Add, Mul, Neg, Sub};
 
-trait Field: Add + Mul + Neg + Clone + Sized {
+trait Field: Add + Sub + Mul + Neg + Clone + Sized + Debug {
     fn q() -> Self;
     fn zero() -> Self;
     fn one() -> Self;
+    fn from(v: u64) -> Self;
     fn is_zero(&self) -> bool;
     fn is_one(&self) -> bool;
 }
 
-trait Var {}
+trait Var: Clone + Debug {}
 
 #[derive(Debug, Clone)]
-enum Expr<F: Field, V> {
+enum Expr<F: Field, V: Var> {
     Const(F),
     Var(V),
     Sum(Vec<Expr<F, V>>),
     Mul(Vec<Expr<F, V>>),
 }
 
-impl<F: Field, V> Add for Expr<F, V> {
+impl<F: Field, V: Var> Add for Expr<F, V> {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         use Expr::*;
@@ -35,7 +35,21 @@ impl<F: Field, V> Add for Expr<F, V> {
     }
 }
 
-impl<F: Field, V> Mul for Expr<F, V> {
+impl<F: Field, V: Var> Sub for Expr<F, V> {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        use Expr::*;
+        match self {
+            Sum(mut xs) => {
+                xs.push(rhs.neg());
+                Sum(xs)
+            }
+            e => Sum(vec![e, rhs.neg()]),
+        }
+    }
+}
+
+impl<F: Field, V: Var> Mul for Expr<F, V> {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self {
         use Expr::*;
@@ -49,14 +63,14 @@ impl<F: Field, V> Mul for Expr<F, V> {
     }
 }
 
-impl<F: Field, V> Neg for Expr<F, V> {
+impl<F: Field, V: Var> Neg for Expr<F, V> {
     type Output = Self;
     fn neg(self) -> Self {
         Expr::Const(F::q()).mul(self)
     }
 }
 
-impl<F: Field, V> Ord for Expr<F, V> {
+impl<F: Field, V: Var> Ord for Expr<F, V> {
     fn cmp(&self, other: &Self) -> Ordering {
         use Expr::*;
         use Ordering::*;
@@ -82,21 +96,21 @@ impl<F: Field, V> Ord for Expr<F, V> {
     }
 }
 
-impl<F: Field, V> PartialOrd for Expr<F, V> {
+impl<F: Field, V: Var> PartialOrd for Expr<F, V> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<F: Field, V> PartialEq for Expr<F, V> {
+impl<F: Field, V: Var> PartialEq for Expr<F, V> {
     fn eq(&self, _other: &Self) -> bool {
         true
     }
 }
 
-impl<F: Field, V> Eq for Expr<F, V> {}
+impl<F: Field, V: Var> Eq for Expr<F, V> {}
 
-impl<F: Field + Add<Output = F> + Mul<Output = F>, V> Expr<F, V> {
+impl<F: Field + Add<Output = F> + Mul<Output = F>, V: Var> Expr<F, V> {
     fn simplify(self) -> Self {
         use Expr::*;
         match self {
@@ -109,6 +123,10 @@ impl<F: Field + Add<Output = F> + Mul<Output = F>, V> Expr<F, V> {
                     .into_iter()
                     .fold((F::zero(), Vec::new()), |(c, mut tail), x| match x {
                         Const(a) => (c + a, tail),
+                        Sum(xs) => (c, {
+                            tail.extend(xs.into_iter());
+                            tail
+                        }),
                         a => (c, {
                             tail.push(a);
                             tail
@@ -116,6 +134,9 @@ impl<F: Field + Add<Output = F> + Mul<Output = F>, V> Expr<F, V> {
                     });
                 let mut r = if c.is_zero() { vec![] } else { vec![Const(c)] };
                 r.extend(tail.into_iter());
+                if r.len() == 1 {
+                    return r.swap_remove(0);
+                }
                 Sum(r)
             }
             Mul(xs) => {
@@ -125,6 +146,10 @@ impl<F: Field + Add<Output = F> + Mul<Output = F>, V> Expr<F, V> {
                     .into_iter()
                     .fold((F::one(), Vec::new()), |(c, mut tail), x| match x {
                         Const(a) => (c * a, tail),
+                        Mul(xs) => (c, {
+                            tail.extend(xs.into_iter());
+                            tail
+                        }),
                         a => (c, {
                             tail.push(a);
                             tail
@@ -140,38 +165,65 @@ impl<F: Field + Add<Output = F> + Mul<Output = F>, V> Expr<F, V> {
                     }
                 };
                 r.extend(tail.into_iter());
+                if r.len() == 1 {
+                    return r.swap_remove(0);
+                }
                 Mul(r)
             }
         }
     }
 }
 
-impl<F: Field + Display, V: Display> Expr<F, V> {
-    fn fmt_ascii<W: Write>(&self, f: &mut W) -> fmt::Result {
+impl<F: Field + Display, V: Var> Expr<F, V> {
+    fn is_terminal(&self) -> bool {
         use Expr::*;
         match self {
-            Const(a) => write!(f, "{}", a),
-            Var(a) => write!(f, "{}", a),
-            Sum(xs) => {
+            Const(_) | Var(_) => true,
+            _ => false,
+        }
+    }
+
+    fn fmt_ascii<W: Write>(&self, f: &mut W) -> fmt::Result {
+        use Expr::*;
+        let fmt_exp = |e: &Self, f: &mut W, parens: bool| -> fmt::Result {
+            if parens {
                 write!(f, "(")?;
+            }
+            e.fmt_ascii(f)?;
+            if parens {
+                write!(f, ")")?;
+            }
+            Ok(())
+        };
+        match self {
+            Const(a) => write!(f, "{}", a),
+            Var(a) => write!(f, "{:?}", a),
+            Sum(xs) => {
                 for (i, x) in xs.iter().enumerate() {
-                    x.fmt_ascii(f)?;
+                    let parens = if x.is_terminal() {
+                        false
+                    } else {
+                        if let Mul(_) = x {
+                            false
+                        } else {
+                            true
+                        }
+                    };
+                    fmt_exp(x, f, parens)?;
                     if i != xs.len() - 1 {
                         write!(f, " + ")?;
                     }
                 }
-                write!(f, ")")?;
                 Ok(())
             }
             Mul(xs) => {
-                write!(f, "(")?;
                 for (i, x) in xs.iter().enumerate() {
-                    x.fmt_ascii(f)?;
+                    let parens = if x.is_terminal() { false } else { true };
+                    fmt_exp(x, f, parens)?;
                     if i != xs.len() - 1 {
                         write!(f, " * ")?;
                     }
                 }
-                write!(f, ")")?;
                 Ok(())
             }
         }
@@ -197,6 +249,9 @@ impl Field for Fq {
     fn q() -> Self {
         Fq(0xffffffffffffffff)
     }
+    fn from(v: u64) -> Self {
+        Fq(v)
+    }
     fn is_zero(&self) -> bool {
         self.0 == 0
     }
@@ -205,10 +260,20 @@ impl Field for Fq {
     }
 }
 
+impl Var for &'static str {}
+
 impl Add for Fq {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         let (r, _) = self.0.overflowing_add(rhs.0);
+        Fq(r)
+    }
+}
+
+impl Sub for Fq {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        let (r, _) = self.0.overflowing_sub(rhs.0);
         Fq(r)
     }
 }
@@ -230,13 +295,18 @@ impl Neg for Fq {
 
 fn main() {
     use Expr::*;
-    let e = Const(Fq(2)) * Const(Fq(3)) * Var("a") + Const(Fq(5)) + Const(Fq(5)) + Var("b");
+    let c = |v| -> Expr<Fq, &'static str> { Const(Fq(v)) };
+    // let e = Const(Fq(2)) * Const(Fq(3)) * Var("a") + Const(Fq(5)) + Const(Fq(5)) + Var("b");
     // let e = Const(Fq(2)) * Const(Fq(3))
     //     + Const(Fq(3)) * Const(Fq(4))
     //     + Const(Fq(5))
     //     + Const(Fq(5))
     //     + Const(Fq(6))
     //     + Var("a");
+    // let e = (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d")));
+    // let e = (c(2) - c(1)) * Var("a");
+    let e: Expr<Fq, _> = -Var("a");
+    println!("{:?}", e);
     let mut s = String::new();
     e.fmt_ascii(&mut s).unwrap();
     println!("{}", s);
