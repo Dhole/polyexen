@@ -165,8 +165,14 @@ impl<V: Var> Expr<V> {
             }
             Const(f) => Const(f),
             Var(v) => Var(v),
-            Sum(xs) => {
-                let mut xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.simplify(p)).collect();
+            Sum(es) => {
+                let mut xs: Vec<Expr<V>> = Vec::new();
+                for x in es.into_iter().map(|x| x.simplify(p)) {
+                    match x {
+                        Sum(es) => xs.extend(es.into_iter()),
+                        e => xs.push(e),
+                    }
+                }
                 xs.sort();
                 let mut c = BigInt::zero();
                 let mut tail = Vec::new();
@@ -177,7 +183,6 @@ impl<V: Var> Expr<V> {
                             a => tail.push(Neg(Box::new(a))),
                         },
                         Const(a) => c = iadd(c, a, ip),
-                        Sum(xs) => tail.extend(xs.into_iter()),
                         a => tail.push(a),
                     }
                 }
@@ -199,8 +204,14 @@ impl<V: Var> Expr<V> {
                 };
                 s
             }
-            Mul(xs) => {
-                let mut xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.simplify(p)).collect();
+            Mul(es) => {
+                let mut xs: Vec<Expr<V>> = Vec::new();
+                for x in es.into_iter().map(|x| x.simplify(p)) {
+                    match x {
+                        Mul(es) => xs.extend(es.into_iter()),
+                        e => xs.push(e),
+                    }
+                }
                 xs.sort();
                 let mut neg = false;
                 let mut c = BigUint::one();
@@ -213,7 +224,6 @@ impl<V: Var> Expr<V> {
                     neg = neg ^ x_is_neg;
                     match x {
                         Const(a) => c = mul(c, &a, p),
-                        Mul(xs) => tail.extend(xs.into_iter()),
                         a => tail.push(a),
                     }
                 }
@@ -246,8 +256,46 @@ impl<V: Var> Expr<V> {
         self._simplify(p, &ip)
     }
 
+    fn _normalize(self, p: &BigUint) -> Self {
+        use Expr::*;
+        // p-1 == -1
+        let p_1 = p.clone() - BigUint::one();
+        match self {
+            Neg(e) => Mul(vec![Const(p_1.clone()), *e]),
+            Sum(xs) => {
+                let xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.normalize(p)).collect();
+                Sum(xs)
+            }
+            Mul(xs) => {
+                let mut xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.normalize(p)).collect();
+                xs.sort();
+                let mut iter = xs.into_iter();
+                let mul_acc = iter.next().unwrap();
+                let mut mul_acc = match mul_acc {
+                    Sum(xs) => xs,
+                    e => vec![e],
+                };
+                while let Some(next) = iter.next() {
+                    let e = match next {
+                        Sum(xs) => xs,
+                        e => vec![e],
+                    };
+                    let mut acc = Vec::new();
+                    for a in mul_acc.into_iter() {
+                        for b in &e {
+                            acc.push(Mul(vec![a.clone(), b.clone()]));
+                        }
+                    }
+                    mul_acc = acc;
+                }
+                Sum(mul_acc)
+            }
+            _ => self,
+        }
+    }
+
     fn normalize(self, p: &BigUint) -> Self {
-        todo!();
+        self.simplify(p)._normalize(p).simplify(p)
     }
 }
 
@@ -318,7 +366,7 @@ impl<V: Var> Expr<V> {
                     let parens = !e.is_terminal();
                     fmt_exp(e, f, parens)?;
                     if i != es.len() - 1 {
-                        write!(f, " * ")?;
+                        write!(f, "*")?;
                     }
                 }
                 Ok(())
@@ -333,21 +381,32 @@ fn main() {
     let p = BigUint::from(0x1_00_00u64);
     // let e = c(2) * c(3) * Var("a") + c(5) + c(5) + Var("b");
     // let e = c(2) * c(3) + c(3) * c(4) + c(5) + c(5) + c(6) + Var("a");
-    // let e = (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d")));
+    let e = (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d")));
     // let e = (c(2) - c(1)) * Var("a");
     // let e = (c(1) - c(2)) * Var("a");
     // let e = (c(0xffff)) - (c(0xff00) - (-c(123))) * Var("a");
     // let e = Var("a") - Var("b");
-    let e = c(5) * (Var("a") * (c(1) - c(2)) * Var("b") + Var("c"));
-    println!("{:?}", e);
+    // let e = c(5) * (Var("a") * (c(1) - c(2)) * Var("b") + Var("c"));
+    println!("raw e: {:?}", e);
     let mut s = String::new();
     e.fmt_ascii(&mut s).unwrap();
-    println!("{}", s);
+    println!("e: {}", s);
+
+    let e = e.clone().normalize(&p);
     s.clear();
-    let e = e.simplify(&p);
-    println!("{:?}", e);
     e.fmt_ascii(&mut s).unwrap();
-    println!("{}", s);
+    println!("e.normalize: {}", s);
+
+    let e = e.simplify(&p);
+    println!("raw e.normalize: {:?}", e);
+    s.clear();
+    e.fmt_ascii(&mut s).unwrap();
+    println!("e.simplify: {}", s);
+
+    let e = e.normalize(&p);
+    s.clear();
+    e.fmt_ascii(&mut s).unwrap();
+    println!("e.normalize: {}", s);
 }
 
 // Types
