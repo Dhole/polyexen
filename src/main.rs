@@ -1,6 +1,8 @@
-use num_bigint::{BigInt, BigUint, Sign};
+use num_bigint::{BigInt, BigUint, RandBigInt, Sign};
 use num_integer::Integer;
 use num_traits::{One, Zero};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
 use std::fmt::{self, Debug, Display, Write};
 use std::ops::{Add, Mul, Neg, Sub};
@@ -25,6 +27,42 @@ enum Expr<V: Var> {
     Sum(Vec<Expr<V>>),
     Mul(Vec<Expr<V>>),
     Neg(Box<Expr<V>>),
+}
+
+impl Expr<&'static str> {
+    fn _rand<R: Rng>(rng: &mut R, p: &BigUint, depth: usize) -> Self {
+        use Expr::*;
+        const MAX_ELEMS: usize = 8;
+        const VARS: &'static str = "abcdefghijklmnopqrstuvwxyz";
+        let case_max = if depth > 0 { 4 } else { 1 };
+        let case: u8 = rng.gen_range(0..=case_max);
+        match case {
+            0 => Const(rng.gen_biguint_below(p)),
+            1 => {
+                let i = rng.gen_range(0..26);
+                Var(&VARS[i..i + 1])
+            }
+            2 => {
+                let mut v = Vec::new();
+                for _ in 0..rng.gen_range(2..MAX_ELEMS) {
+                    v.push(Expr::_rand(rng, p, depth - 1));
+                }
+                Sum(v)
+            }
+            3 => {
+                let mut v = Vec::new();
+                for _ in 0..rng.gen_range(2..MAX_ELEMS) {
+                    v.push(Expr::_rand(rng, p, depth - 1));
+                }
+                Mul(v)
+            }
+            4 => Neg(Box::new(Expr::_rand(rng, p, depth - 1))),
+            _ => unreachable!(),
+        }
+    }
+    fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> Self {
+        Expr::_rand(rng, p, 4)
+    }
 }
 
 impl<V: Var> Add for Expr<V> {
@@ -381,12 +419,14 @@ fn main() {
     let p = BigUint::from(0x1_00_00u64);
     // let e = c(2) * c(3) * Var("a") + c(5) + c(5) + Var("b");
     // let e = c(2) * c(3) + c(3) * c(4) + c(5) + c(5) + c(6) + Var("a");
-    let e = (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d")));
+    // let e = (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d")));
     // let e = (c(2) - c(1)) * Var("a");
     // let e = (c(1) - c(2)) * Var("a");
     // let e = (c(0xffff)) - (c(0xff00) - (-c(123))) * Var("a");
     // let e = Var("a") - Var("b");
     // let e = c(5) * (Var("a") * (c(1) - c(2)) * Var("b") + Var("c"));
+    let mut rng = ChaCha20Rng::seed_from_u64(9);
+    let e = Expr::rand(&mut rng, &p);
     println!("raw e: {:?}", e);
     let mut s = String::new();
     e.fmt_ascii(&mut s).unwrap();
