@@ -4,7 +4,9 @@ use num_traits::{One, Zero};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Write};
+use std::hash::Hash;
 use std::ops::{Add, Mul, Neg, Sub};
 
 // trait Field: Add + Sub + Mul + Neg + Clone + Sized + Debug {
@@ -29,15 +31,20 @@ enum Expr<V: Var> {
     Neg(Box<Expr<V>>),
 }
 
+fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> BigUint {
+    rng.gen_biguint_below(p)
+}
+
+const VARS: &'static str = "abcdefghijklmnopqrstuvwxyz";
+
 impl Expr<&'static str> {
     fn _rand<R: Rng>(rng: &mut R, p: &BigUint, depth: usize) -> Self {
         use Expr::*;
         const MAX_ELEMS: usize = 8;
-        const VARS: &'static str = "abcdefghijklmnopqrstuvwxyz";
         let case_max = if depth > 0 { 4 } else { 1 };
         let case: u8 = rng.gen_range(0..=case_max);
         match case {
-            0 => Const(rng.gen_biguint_below(p)),
+            0 => Const(rand(rng, p)),
             1 => {
                 let i = rng.gen_range(0..26);
                 Var(&VARS[i..i + 1])
@@ -184,11 +191,48 @@ fn isub(lhs: BigInt, rhs: BigUint, p: &BigInt) -> BigInt {
     norm(r, p)
 }
 
+fn add(lhs: BigUint, rhs: BigUint, p: &BigUint) -> BigUint {
+    let r = lhs + rhs;
+    if &r >= p {
+        r - p
+    } else {
+        r
+    }
+}
+
+fn neg(n: BigUint, p: &BigUint) -> BigUint {
+    let r = p - n;
+    r
+}
+
 fn mul(lhs: BigUint, rhs: &BigUint, p: &BigUint) -> BigUint {
     (lhs * rhs).mod_floor(p)
 }
 
-impl<V: Var> Expr<V> {
+impl<V: Var + Eq + Hash> Expr<V> {
+    fn eval(&self, p: &BigUint, vars: &HashMap<V, BigUint>) -> BigUint {
+        use Expr::*;
+        match self {
+            Neg(e) => neg((*e).eval(p, vars), p),
+            Const(f) => f.clone(),
+            Var(v) => vars.get(v).unwrap().clone(),
+            Sum(es) => {
+                let mut res = BigUint::zero();
+                for e in es.iter().map(|e| e.eval(p, vars)) {
+                    res = add(res, e, p);
+                }
+                res
+            }
+            Mul(es) => {
+                let mut res = BigUint::one();
+                for e in es.iter().map(|e| e.eval(p, vars)) {
+                    res = mul(res, &e, p);
+                }
+                res
+            }
+        }
+    }
+
     fn _simplify(self, p: &BigUint, ip: &BigInt) -> Self {
         use Expr::*;
         // p-1 == -1
@@ -375,7 +419,8 @@ impl<V: Var> Expr<V> {
         match self {
             Neg(a) => {
                 write!(f, "-")?;
-                fmt_exp(a, f, false)?;
+                let parens = !a.is_terminal();
+                fmt_exp(a, f, parens)?;
                 Ok(())
             }
             Const(c) => write!(f, "{}", c),
@@ -447,6 +492,70 @@ fn main() {
     s.clear();
     e.fmt_ascii(&mut s).unwrap();
     println!("e.normalize: {}", s);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use Expr::*;
+
+    fn c(v: u64) -> Expr<&'static str> {
+        Const(BigUint::from(v))
+    }
+
+    #[test]
+    fn fmt_ascii() {
+        #[rustfmt::skip]
+        let tests = vec![
+            (
+                c(2) * c(3) * Var("a") + c(5) + c(5) + Var("b"),
+                "2*3*a + 5 + 5 + b",
+            ),
+            (
+                (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d"))),
+                "(2 + a)*(3 + b) + (4 + c)*(5 + d)",
+            ),
+            (
+                -(c(2) - Var("a")),
+                "-(2 - a)"
+            ),
+        ];
+        for (exp, exp_fmt) in tests {
+            let mut s = String::new();
+            exp.fmt_ascii(&mut s).unwrap();
+            assert_eq!(s.as_str(), exp_fmt);
+        }
+    }
+
+    #[test]
+    fn simplify() {
+        let p = BigUint::from(0x1_00_00u64);
+        let vars: HashMap<&'static str, BigUint> = {
+            let mut rng = ChaCha20Rng::seed_from_u64(0);
+            (0..26)
+                .map(|i| (&VARS[i..i + 1], rand(&mut rng, &p)))
+                .collect()
+        };
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
+        for i in 0..64 {
+            let e1 = Expr::rand(&mut rng, &p);
+            // let mut s = String::new();
+            // e1.fmt_ascii(&mut s).unwrap();
+            let e2 = e1.clone().simplify(&p);
+            let eval1 = e1.eval(&p, &vars);
+            let eval2 = e2.eval(&p, &vars);
+            if eval1 != eval2 {
+                let mut s1 = String::new();
+                e1.fmt_ascii(&mut s1).unwrap();
+                let mut s2 = String::new();
+                e2.fmt_ascii(&mut s2).unwrap();
+                println!("{} e1: {}", i, s1);
+                println!("{} e2: {}", i, s2);
+            }
+            assert_eq!(e1.eval(&p, &vars), e2.eval(&p, &vars));
+            // println!("e: {}", s);
+        }
+    }
 }
 
 // Types
