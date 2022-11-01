@@ -38,7 +38,7 @@ fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> BigUint {
 const VARS: &'static str = "abcdefghijklmnopqrstuvwxyz";
 
 impl Expr<&'static str> {
-    fn _rand<R: Rng>(rng: &mut R, p: &BigUint, depth: usize) -> Self {
+    fn rand_depth<R: Rng>(rng: &mut R, p: &BigUint, depth: usize) -> Self {
         use Expr::*;
         const MAX_ELEMS: usize = 8;
         let case_max = if depth > 0 { 4 } else { 1 };
@@ -52,23 +52,23 @@ impl Expr<&'static str> {
             2 => {
                 let mut v = Vec::new();
                 for _ in 0..rng.gen_range(2..MAX_ELEMS) {
-                    v.push(Expr::_rand(rng, p, depth - 1));
+                    v.push(Expr::rand_depth(rng, p, depth - 1));
                 }
                 Sum(v)
             }
             3 => {
                 let mut v = Vec::new();
                 for _ in 0..rng.gen_range(2..MAX_ELEMS) {
-                    v.push(Expr::_rand(rng, p, depth - 1));
+                    v.push(Expr::rand_depth(rng, p, depth - 1));
                 }
                 Mul(v)
             }
-            4 => Neg(Box::new(Expr::_rand(rng, p, depth - 1))),
+            4 => Neg(Box::new(Expr::rand_depth(rng, p, depth - 1))),
             _ => unreachable!(),
         }
     }
     fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> Self {
-        Expr::_rand(rng, p, 4)
+        Expr::rand_depth(rng, p, 4)
     }
 }
 
@@ -174,7 +174,7 @@ impl<V: Var> Eq for Expr<V> {}
 fn norm(n: BigInt, p: &BigInt) -> BigInt {
     if &n >= p {
         n - p
-    } else if -&n <= -p {
+    } else if &n <= &-p {
         n + p
     } else {
         n
@@ -214,7 +214,7 @@ impl<V: Var + Eq + Hash> Expr<V> {
         use Expr::*;
         match self {
             Neg(e) => {
-                dbg!(&e);
+                // dbg!(&e);
                 neg((*e).eval(p, vars), p)
             }
             Const(f) => f.clone(),
@@ -534,21 +534,18 @@ mod tests {
 
     #[test]
     fn simplify() {
-        let p = BigUint::from(0x1_00_00u64);
+        let p = BigUint::from(0x10000u64 - 15);
         let vars: HashMap<&'static str, BigUint> = {
             let mut rng = ChaCha20Rng::seed_from_u64(0);
             (0..26)
                 .map(|i| (&VARS[i..i + 1], rand(&mut rng, &p)))
                 .collect()
         };
-        dbg!(&vars);
+        // dbg!(&vars);
         let mut rng = ChaCha20Rng::seed_from_u64(0);
         for i in 0..1024 {
             let e1 = Expr::rand(&mut rng, &p);
             let e2 = e1.clone().simplify(&p);
-            let mut s = String::new();
-            e2.fmt_ascii(&mut s).unwrap();
-            println!("{} e2: {}", i, s);
             let eval1 = e1.eval(&p, &vars);
             let eval2 = e2.eval(&p, &vars);
             if eval1 != eval2 {
@@ -559,8 +556,27 @@ mod tests {
                 println!("{} e1: {}", i, s1);
                 println!("{} e2: {}", i, s2);
             }
-            // assert_eq!(e1.eval(&p, &vars), e2.eval(&p, &vars));
-            // println!("e: {}", s);
+            assert_eq!(eval1, eval2);
+        }
+    }
+
+    #[test]
+    fn normalize() {
+        let p = BigUint::from(0x10000u64 - 15);
+        let vars: HashMap<&'static str, BigUint> = {
+            let mut rng = ChaCha20Rng::seed_from_u64(0);
+            (0..26)
+                .map(|i| (&VARS[i..i + 1], rand(&mut rng, &p)))
+                .collect()
+        };
+        // dbg!(&vars);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
+        for _i in 0..1024 {
+            let e1 = Expr::rand_depth(&mut rng, &p, 3);
+            let e2 = e1.clone().normalize(&p);
+            let eval1 = e1.eval(&p, &vars);
+            let eval2 = e2.eval(&p, &vars);
+            assert_eq!(eval1, eval2);
         }
     }
 }
