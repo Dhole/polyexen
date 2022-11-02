@@ -21,6 +21,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 trait Var: Clone + Debug + Display {}
 
 impl Var for &'static str {}
+impl Var for String {}
 
 #[derive(Debug, Clone)]
 enum Expr<V: Var> {
@@ -463,6 +464,122 @@ impl<V: Var> Expr<V> {
     }
 }
 
+type Ex = Expr<String>;
+
+use nom::{
+    branch::alt,
+    bytes::complete::{tag, take_while1, take_while_m_n},
+    character::complete::{char, digit1, one_of, space0},
+    combinator::{map, map_res},
+    error::ErrorKind,
+    multi::many0,
+    sequence::{delimited, tuple},
+    IResult,
+};
+
+pub(crate) fn parse(input: &str) -> IResult<&str, Ex> {
+    parse_basic_expr(input)
+}
+
+fn parse_basic_expr(input: &str) -> IResult<&str, Ex> {
+    parse_math_expr(input)
+}
+
+fn parse_math_expr(input: &str) -> IResult<&str, Ex> {
+    let (input, num1) = parse_term(input)?;
+    let (input, exprs) = many0(tuple((alt((char('+'), char('-'))), parse_term)))(input)?;
+    Ok((input, parse_expr(num1, exprs)))
+}
+
+fn parse_term(input: &str) -> IResult<&str, Ex> {
+    let (input, num1) = parse_factor(input)?;
+    let (input, exprs) = many0(tuple((alt((char('/'), char('*'))), parse_factor)))(input)?;
+    Ok((input, parse_expr(num1, exprs)))
+}
+
+fn parse_factor(input: &str) -> IResult<&str, Ex> {
+    let (input, num1) = parse_operation(input)?;
+    let (input, exprs) = many0(tuple((char('^'), parse_factor)))(input)?;
+    Ok((input, parse_expr(num1, exprs)))
+}
+
+fn parse_operation(input: &str) -> IResult<&str, Ex> {
+    alt((parse_parens, alt((parse_hex, alt((parse_dec, parse_var))))))(input)
+}
+
+fn parse_parens(input: &str) -> IResult<&str, Ex> {
+    delimited(
+        space0,
+        delimited(char('('), parse_math_expr, char(')')),
+        space0,
+    )(input)
+}
+
+fn parse_expr(e: Ex, rem: Vec<(char, Ex)>) -> Ex {
+    rem.into_iter().fold(e, |acc, val| parse_op(val, acc))
+}
+
+fn is_hex_digit(c: char) -> bool {
+    c.is_digit(16)
+}
+
+fn parse_op(tup: (char, Ex), e1: Ex) -> Ex {
+    use Expr::*;
+    let (op, e2) = tup;
+    match op {
+        '+' => Sum(vec![e1, e2]),
+        '-' => Sum(vec![e1, Neg(Box::new(e2))]),
+        '*' => Mul(vec![e1, e2]),
+        _ => panic!("Unknown Operation"),
+    }
+}
+
+fn parse_hex_econst(parsed_hex: &str) -> Ex {
+    let n = BigUint::parse_bytes(parsed_hex.as_bytes(), 16).unwrap();
+    Expr::Const(n)
+}
+
+fn parse_dec_econst(parsed_hex: &str) -> Ex {
+    let n = BigUint::parse_bytes(parsed_hex.as_bytes(), 10).unwrap();
+    Expr::Const(n)
+}
+
+fn parse_hex(input: &str) -> IResult<&str, Ex> {
+    map(
+        delimited(tuple((space0, tag("0x"))), digit1, space0),
+        parse_hex_econst,
+    )(input)
+}
+
+fn parse_dec(input: &str) -> IResult<&str, Ex> {
+    map(delimited(space0, digit1, space0), parse_dec_econst)(input)
+}
+
+fn parse_evar(input: &str) -> Ex {
+    Expr::Var(input.to_string())
+}
+
+fn parse_var(input: &str) -> IResult<&str, Ex> {
+    let is_var_char = |c| {
+        (c >= '0' && c <= '9')
+            || (c >= 'A' && c <= 'Z')
+            || (c >= 'a' && c <= 'z')
+            || (c == ','
+                || c == '.'
+                || c == ':'
+                || c == ';'
+                || c == '?'
+                || c == '@'
+                || c == '['
+                || c == ']'
+                || c == '_')
+    };
+    map(
+        delimited(space0, take_while1(is_var_char), space0),
+        parse_evar,
+    )(input)
+}
+
 fn main() {
     use Expr::*;
     let c = |v: u64| -> Expr<&'static str> { Const(BigUint::from(v)) };
@@ -504,12 +621,17 @@ mod tests {
     use super::*;
     use Expr::*;
 
+    #[test]
+    fn test_parse() {
+        dbg!(parse("1 + 2 + 3  +  0x12 * a +  32 *a*b"));
+    }
+
     fn c(v: u64) -> Expr<&'static str> {
         Const(BigUint::from(v))
     }
 
     #[test]
-    fn fmt_ascii() {
+    fn test_fmt_ascii() {
         #[rustfmt::skip]
         let tests = vec![
             (
@@ -533,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify() {
+    fn test_simplify() {
         let p = BigUint::from(0x10000u64 - 15);
         let vars: HashMap<&'static str, BigUint> = {
             let mut rng = ChaCha20Rng::seed_from_u64(0);
@@ -561,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize() {
+    fn test_normalize() {
         let p = BigUint::from(0x10000u64 - 15);
         let vars: HashMap<&'static str, BigUint> = {
             let mut rng = ChaCha20Rng::seed_from_u64(0);
