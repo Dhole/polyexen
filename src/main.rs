@@ -18,13 +18,13 @@ use std::ops::{Add, Mul, Neg, Sub};
 //     fn is_one(&self) -> bool;
 // }
 
-trait Var: Clone + Debug + Display {}
+pub trait Var: Clone + Debug + Display {}
 
 impl Var for &'static str {}
 impl Var for String {}
 
 #[derive(Debug, Clone)]
-enum Expr<V: Var> {
+pub enum Expr<V: Var> {
     Const(BigUint),
     Var(V),
     Sum(Vec<Expr<V>>),
@@ -387,6 +387,12 @@ impl<V: Var + Eq + Hash> Expr<V> {
     }
 }
 
+impl<V: Var> Display for Expr<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_ascii(f)
+    }
+}
+
 impl<V: Var> Expr<V> {
     // sumatory terminal
     fn is_terminal(&self) -> bool {
@@ -438,7 +444,11 @@ impl<V: Var> Expr<V> {
                     } else {
                         (false, e)
                     };
-                    if i != 0 {
+                    if i == 0 {
+                        if neg {
+                            write!(f, "-")?;
+                        }
+                    } else {
                         if neg {
                             write!(f, " - ")?;
                         } else {
@@ -464,7 +474,7 @@ impl<V: Var> Expr<V> {
     }
 }
 
-type Ex = Expr<String>;
+pub type Ex = Expr<String>;
 
 use nom::{
     branch::alt,
@@ -477,7 +487,7 @@ use nom::{
     IResult,
 };
 
-pub(crate) fn parse(input: &str) -> IResult<&str, Ex> {
+pub fn parse(input: &str) -> IResult<&str, Ex> {
     parse_basic_expr(input)
 }
 
@@ -519,17 +529,38 @@ fn parse_expr(e: Ex, rem: Vec<(char, Ex)>) -> Ex {
     rem.into_iter().fold(e, |acc, val| parse_op(val, acc))
 }
 
-fn is_hex_digit(c: char) -> bool {
-    c.is_digit(16)
-}
+// fn is_hex_digit(c: char) -> bool {
+//     c.is_digit(16)
+// }
 
 fn parse_op(tup: (char, Ex), e1: Ex) -> Ex {
     use Expr::*;
     let (op, e2) = tup;
     match op {
-        '+' => Sum(vec![e1, e2]),
-        '-' => Sum(vec![e1, Neg(Box::new(e2))]),
-        '*' => Mul(vec![e1, e2]),
+        '+' => {
+            if let Sum(mut es) = e1 {
+                es.push(e2);
+                Sum(es)
+            } else {
+                Sum(vec![e1, e2])
+            }
+        }
+        '-' => {
+            if let Sum(mut es) = e1 {
+                es.push(Neg(Box::new(e2)));
+                Sum(es)
+            } else {
+                Sum(vec![e1, Neg(Box::new(e2))])
+            }
+        }
+        '*' => {
+            if let Mul(mut es) = e1 {
+                es.push(e2);
+                Mul(es)
+            } else {
+                Mul(vec![e1, e2])
+            }
+        }
         _ => panic!("Unknown Operation"),
     }
 }
@@ -616,14 +647,101 @@ fn main() {
     println!("e.normalize: {}", s);
 }
 
+extern crate pest;
+#[macro_use]
+extern crate pest_derive;
+
+#[macro_use]
+extern crate lazy_static;
+
+use pest::Parser;
+
+#[derive(Parser)]
+#[grammar = "expr.pest"]
+struct ExprParser;
+use pest::iterators::Pairs;
+use pest::pratt_parser::PrattParser;
+
+lazy_static! {
+    static ref PRATT_PARSER: PrattParser<Rule> = {
+        use pest::pratt_parser::{Assoc::*, Op};
+        use Rule::*;
+
+        PrattParser::new()
+            .op(Op::infix(add, Left) | Op::infix(subtract, Left))
+            .op(Op::infix(multiply, Left))
+    };
+}
+
+fn parse2(expression: Pairs<Rule>) -> Ex {
+    use Expr::*;
+    PRATT_PARSER
+        .map_primary(|primary| match primary.as_rule() {
+            Rule::dec => (
+                Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 10).unwrap()),
+                true,
+            ),
+            Rule::hex => (
+                Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 16).unwrap()),
+                true,
+            ),
+            Rule::var => (Var(primary.as_str().to_string()), true),
+            Rule::neg => (Neg(Box::new(parse2(primary.into_inner()))), true),
+            Rule::expr => (parse2(primary.into_inner()), false),
+            _ => unreachable!(),
+        })
+        // lcont and rcont tell wether the lhs and rhs terms belong to the same expr or not
+        .map_infix(|(lhs, lcont), op, (rhs, rcont)| {
+            (
+                match op.as_rule() {
+                    Rule::add => match (lhs, lcont & rcont) {
+                        (Sum(mut es), true) => {
+                            es.push(rhs);
+                            Sum(es)
+                        }
+                        (lhs, _) => Sum(vec![lhs, rhs]),
+                    },
+                    Rule::subtract => match (lhs, lcont & rcont) {
+                        (Sum(mut es), true) => {
+                            es.push(Neg(Box::new(rhs)));
+                            Sum(es)
+                        }
+                        (lhs, _) => Sum(vec![lhs, Neg(Box::new(rhs))]),
+                    },
+                    Rule::multiply => match (lhs, lcont & rcont) {
+                        (Mul(mut es), true) => {
+                            es.push(rhs);
+                            Mul(es)
+                        }
+                        (lhs, _) => Mul(vec![lhs, rhs]),
+                    },
+                    _ => unreachable!(),
+                },
+                true,
+            )
+        })
+        .parse(expression)
+        .0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use Expr::*;
 
     #[test]
-    fn test_parse() {
-        dbg!(parse("1 + 2 + 3  +  0x12 * a +  32 *a*b"));
+    fn test_parse1() {
+        // dbg!(parse("1 + 2 + 3  +  0x12 * a +  32 *a*b"));
+        dbg!(parse("(1 + 2) + 3"));
+    }
+
+    #[test]
+    fn test_parse2() {
+        let r = ExprParser::parse(Rule::expr, "(-1 + 2)");
+        dbg!(&r);
+        let e = parse2(r.unwrap());
+        println!("{:?}", e);
+        println!("{}", e);
     }
 
     fn c(v: u64) -> Expr<&'static str> {
@@ -645,6 +763,10 @@ mod tests {
             (
                 -(c(2) - Var("a")),
                 "-(2 - a)"
+            ),
+            (
+                (-c(1) + c(2)),
+                "-1 + 2"
             ),
         ];
         for (exp, exp_fmt) in tests {
