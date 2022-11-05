@@ -1,10 +1,9 @@
 use num_bigint::{BigInt, BigUint, RandBigInt, Sign};
 use num_integer::Integer;
 use num_traits::{One, Zero};
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
+use rand::Rng;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Write};
 use std::hash::Hash;
 use std::ops::{Add, Mul, Neg, Sub};
@@ -36,10 +35,10 @@ fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> BigUint {
     rng.gen_biguint_below(p)
 }
 
-const VARS: &'static str = "abcdefghijklmnopqrstuvwxyz";
+const VARS: &str = "abcdefghijklmnopqrstuvwxyz";
 
 impl Expr<&'static str> {
-    fn rand_depth<R: Rng>(rng: &mut R, p: &BigUint, depth: usize) -> Self {
+    pub fn rand_depth<R: Rng>(rng: &mut R, p: &BigUint, depth: usize) -> Self {
         use Expr::*;
         const MAX_ELEMS: usize = 8;
         let case_max = if depth > 0 { 4 } else { 1 };
@@ -68,7 +67,7 @@ impl Expr<&'static str> {
             _ => unreachable!(),
         }
     }
-    fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> Self {
+    pub fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> Self {
         Expr::rand_depth(rng, p, 4)
     }
 }
@@ -175,7 +174,7 @@ impl<V: Var> Eq for Expr<V> {}
 fn norm(n: BigInt, p: &BigInt) -> BigInt {
     if &n >= p {
         n - p
-    } else if &n <= &-p {
+    } else if n <= -p {
         n + p
     } else {
         n
@@ -202,22 +201,18 @@ fn add(lhs: BigUint, rhs: BigUint, p: &BigUint) -> BigUint {
 }
 
 fn neg(n: BigUint, p: &BigUint) -> BigUint {
-    let r = p - n;
-    r
+    p - n
 }
 
 fn mul(lhs: BigUint, rhs: &BigUint, p: &BigUint) -> BigUint {
     (lhs * rhs).mod_floor(p)
 }
 
-impl<V: Var + Eq + Hash> Expr<V> {
-    fn eval(&self, p: &BigUint, vars: &HashMap<V, BigUint>) -> BigUint {
+impl<V: Var + Eq + Hash + Ord> Expr<V> {
+    pub fn eval(&self, p: &BigUint, vars: &HashMap<V, BigUint>) -> BigUint {
         use Expr::*;
         match self {
-            Neg(e) => {
-                // dbg!(&e);
-                neg((*e).eval(p, vars), p)
-            }
+            Neg(e) => neg((*e).eval(p, vars), p),
             Const(f) => f.clone(),
             Var(v) => vars.get(v).unwrap().clone(),
             Sum(es) => {
@@ -283,12 +278,11 @@ impl<V: Var + Eq + Hash> Expr<V> {
                     }
                 };
                 r.extend(tail.into_iter());
-                let s = match r.len() {
+                match r.len() {
                     0 => Const(BigUint::zero()),
                     1 => r.swap_remove(0),
                     _ => Sum(r),
-                };
-                s
+                }
             }
             Mul(es) => {
                 let mut xs: Vec<Expr<V>> = Vec::new();
@@ -296,7 +290,7 @@ impl<V: Var + Eq + Hash> Expr<V> {
                 for x in es.into_iter().map(|x| x.simplify(p)) {
                     match x {
                         Neg(e) => {
-                            neg = neg ^ true;
+                            neg ^= true;
                             match *e {
                                 Mul(es) => xs.extend(es.into_iter()),
                                 ne => xs.push(ne),
@@ -317,12 +311,10 @@ impl<V: Var + Eq + Hash> Expr<V> {
                 }
                 let mut r = if c.is_zero() {
                     return Const(BigUint::zero());
+                } else if c.is_one() {
+                    vec![]
                 } else {
-                    if c.is_one() {
-                        vec![]
-                    } else {
-                        vec![Const(c)]
-                    }
+                    vec![Const(c)]
                 };
                 r.extend(tail.into_iter());
                 let m = if r.len() == 1 {
@@ -339,7 +331,7 @@ impl<V: Var + Eq + Hash> Expr<V> {
         }
     }
 
-    fn simplify(self, p: &BigUint) -> Self {
+    pub fn simplify(self, p: &BigUint) -> Self {
         let ip = BigInt::from(p.clone());
         self._simplify(p, &ip)
     }
@@ -349,7 +341,7 @@ impl<V: Var + Eq + Hash> Expr<V> {
         // p-1 == -1
         let p_1 = p.clone() - BigUint::one();
         match self {
-            Neg(e) => Mul(vec![Const(p_1.clone()), *e]),
+            Neg(e) => Mul(vec![Const(p_1), *e]),
             Sum(xs) => {
                 let xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.normalize(p)).collect();
                 Sum(xs)
@@ -363,7 +355,7 @@ impl<V: Var + Eq + Hash> Expr<V> {
                     Sum(xs) => xs,
                     e => vec![e],
                 };
-                while let Some(next) = iter.next() {
+                for next in iter {
                     let e = match next {
                         Sum(xs) => xs,
                         e => vec![e],
@@ -382,8 +374,43 @@ impl<V: Var + Eq + Hash> Expr<V> {
         }
     }
 
-    fn normalize(self, p: &BigUint) -> Self {
+    pub fn normalize(self, p: &BigUint) -> Self {
         self.simplify(p)._normalize(p).simplify(p)
+    }
+
+    fn _vars(&self, vars: &mut HashSet<V>) {
+        use Expr::*;
+        match self {
+            Const(_) => {}
+            Var(v) => {
+                vars.insert(v.clone());
+            }
+            Neg(e) => e._vars(vars),
+            Sum(es) => es.iter().for_each(|e| e._vars(vars)),
+            Mul(es) => es.iter().for_each(|e| e._vars(vars)),
+        }
+    }
+
+    pub fn vars(&self) -> HashSet<V> {
+        let mut vars = HashSet::new();
+        self._vars(&mut vars);
+        vars
+    }
+
+    pub fn test_eq<R: Rng>(&self, rng: &mut R, other: &Self) -> bool {
+        let p = BigUint::parse_bytes(b"100000000000000000000000000000000", 16).unwrap()
+            - BigUint::from(159u64);
+        let e1_vars = self.vars();
+        let e2_vars = other.vars();
+        let mut vars_vec = e1_vars.union(&e2_vars).into_iter().collect::<Vec<_>>();
+        vars_vec.sort();
+        let vars = vars_vec
+            .into_iter()
+            .map(|v| (v.clone(), rand(rng, &p)))
+            .collect();
+        let e1_eval = self.eval(&p, &vars);
+        let e2_eval = other.eval(&p, &vars);
+        e1_eval == e2_eval
     }
 }
 
@@ -396,24 +423,12 @@ impl<V: Var> Display for Expr<V> {
 impl<V: Var> Expr<V> {
     // sumatory terminal
     fn is_terminal(&self) -> bool {
-        use Expr::*;
-        match self {
-            Const(_) | Var(_) => true,
-            _ => false,
-        }
+        matches!(self, Expr::Const(_) | Expr::Var(_))
     }
 
     // multiplicatory terminal
     fn is_mul_terminal(&self) -> bool {
-        if self.is_terminal() {
-            true
-        } else {
-            if let Expr::Mul(_) = self {
-                true
-            } else {
-                false
-            }
-        }
+        self.is_terminal() || matches!(self, Expr::Mul(_))
     }
 
     fn fmt_ascii<W: Write>(&self, f: &mut W) -> fmt::Result {
@@ -448,12 +463,10 @@ impl<V: Var> Expr<V> {
                         if neg {
                             write!(f, "-")?;
                         }
+                    } else if neg {
+                        write!(f, " - ")?;
                     } else {
-                        if neg {
-                            write!(f, " - ")?;
-                        } else {
-                            write!(f, " + ")?;
-                        }
+                        write!(f, " + ")?;
                     }
                     let parens = !e.is_mul_terminal();
                     fmt_exp(e, f, parens)?;
@@ -474,278 +487,51 @@ impl<V: Var> Expr<V> {
     }
 }
 
-pub type Ex = Expr<String>;
-
-use nom::{
-    branch::alt,
-    bytes::complete::{tag, take_while1, take_while_m_n},
-    character::complete::{char, digit1, one_of, space0},
-    combinator::{map, map_res},
-    error::ErrorKind,
-    multi::many0,
-    sequence::{delimited, tuple},
-    IResult,
-};
-
-pub fn parse(input: &str) -> IResult<&str, Ex> {
-    parse_basic_expr(input)
-}
-
-fn parse_basic_expr(input: &str) -> IResult<&str, Ex> {
-    parse_math_expr(input)
-}
-
-fn parse_math_expr(input: &str) -> IResult<&str, Ex> {
-    let (input, num1) = parse_term(input)?;
-    let (input, exprs) = many0(tuple((alt((char('+'), char('-'))), parse_term)))(input)?;
-    Ok((input, parse_expr(num1, exprs)))
-}
-
-fn parse_term(input: &str) -> IResult<&str, Ex> {
-    let (input, num1) = parse_factor(input)?;
-    let (input, exprs) = many0(tuple((alt((char('/'), char('*'))), parse_factor)))(input)?;
-    Ok((input, parse_expr(num1, exprs)))
-}
-
-fn parse_factor(input: &str) -> IResult<&str, Ex> {
-    let (input, num1) = parse_operation(input)?;
-    let (input, exprs) = many0(tuple((char('^'), parse_factor)))(input)?;
-    Ok((input, parse_expr(num1, exprs)))
-}
-
-fn parse_operation(input: &str) -> IResult<&str, Ex> {
-    alt((parse_parens, alt((parse_hex, alt((parse_dec, parse_var))))))(input)
-}
-
-fn parse_parens(input: &str) -> IResult<&str, Ex> {
-    delimited(
-        space0,
-        delimited(char('('), parse_math_expr, char(')')),
-        space0,
-    )(input)
-}
-
-fn parse_expr(e: Ex, rem: Vec<(char, Ex)>) -> Ex {
-    rem.into_iter().fold(e, |acc, val| parse_op(val, acc))
-}
-
-// fn is_hex_digit(c: char) -> bool {
-//     c.is_digit(16)
-// }
-
-fn parse_op(tup: (char, Ex), e1: Ex) -> Ex {
-    use Expr::*;
-    let (op, e2) = tup;
-    match op {
-        '+' => {
-            if let Sum(mut es) = e1 {
-                es.push(e2);
-                Sum(es)
-            } else {
-                Sum(vec![e1, e2])
-            }
-        }
-        '-' => {
-            if let Sum(mut es) = e1 {
-                es.push(Neg(Box::new(e2)));
-                Sum(es)
-            } else {
-                Sum(vec![e1, Neg(Box::new(e2))])
-            }
-        }
-        '*' => {
-            if let Mul(mut es) = e1 {
-                es.push(e2);
-                Mul(es)
-            } else {
-                Mul(vec![e1, e2])
-            }
-        }
-        _ => panic!("Unknown Operation"),
-    }
-}
-
-fn parse_hex_econst(parsed_hex: &str) -> Ex {
-    let n = BigUint::parse_bytes(parsed_hex.as_bytes(), 16).unwrap();
-    Expr::Const(n)
-}
-
-fn parse_dec_econst(parsed_hex: &str) -> Ex {
-    let n = BigUint::parse_bytes(parsed_hex.as_bytes(), 10).unwrap();
-    Expr::Const(n)
-}
-
-fn parse_hex(input: &str) -> IResult<&str, Ex> {
-    map(
-        delimited(tuple((space0, tag("0x"))), digit1, space0),
-        parse_hex_econst,
-    )(input)
-}
-
-fn parse_dec(input: &str) -> IResult<&str, Ex> {
-    map(delimited(space0, digit1, space0), parse_dec_econst)(input)
-}
-
-fn parse_evar(input: &str) -> Ex {
-    Expr::Var(input.to_string())
-}
-
-fn parse_var(input: &str) -> IResult<&str, Ex> {
-    let is_var_char = |c| {
-        (c >= '0' && c <= '9')
-            || (c >= 'A' && c <= 'Z')
-            || (c >= 'a' && c <= 'z')
-            || (c == ','
-                || c == '.'
-                || c == ':'
-                || c == ';'
-                || c == '?'
-                || c == '@'
-                || c == '['
-                || c == ']'
-                || c == '_')
-    };
-    map(
-        delimited(space0, take_while1(is_var_char), space0),
-        parse_evar,
-    )(input)
-}
-
-fn main() {
-    use Expr::*;
-    let c = |v: u64| -> Expr<&'static str> { Const(BigUint::from(v)) };
-    let p = BigUint::from(0x1_00_00u64);
-    // let e = c(2) * c(3) * Var("a") + c(5) + c(5) + Var("b");
-    // let e = c(2) * c(3) + c(3) * c(4) + c(5) + c(5) + c(6) + Var("a");
-    // let e = (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d")));
-    // let e = (c(2) - c(1)) * Var("a");
-    // let e = (c(1) - c(2)) * Var("a");
-    // let e = (c(0xffff)) - (c(0xff00) - (-c(123))) * Var("a");
-    // let e = Var("a") - Var("b");
-    // let e = c(5) * (Var("a") * (c(1) - c(2)) * Var("b") + Var("c"));
-    let mut rng = ChaCha20Rng::seed_from_u64(9);
-    let e = Expr::rand(&mut rng, &p);
-    println!("raw e: {:?}", e);
-    let mut s = String::new();
-    e.fmt_ascii(&mut s).unwrap();
-    println!("e: {}", s);
-
-    let e = e.clone().normalize(&p);
-    s.clear();
-    e.fmt_ascii(&mut s).unwrap();
-    println!("e.normalize: {}", s);
-
-    let e = e.simplify(&p);
-    println!("raw e.normalize: {:?}", e);
-    s.clear();
-    e.fmt_ascii(&mut s).unwrap();
-    println!("e.simplify: {}", s);
-
-    let e = e.normalize(&p);
-    s.clear();
-    e.fmt_ascii(&mut s).unwrap();
-    println!("e.normalize: {}", s);
-}
-
-extern crate pest;
-#[macro_use]
-extern crate pest_derive;
-
-#[macro_use]
-extern crate lazy_static;
-
-use pest::Parser;
-
-#[derive(Parser)]
-#[grammar = "expr.pest"]
-struct ExprParser;
-use pest::iterators::Pairs;
-use pest::pratt_parser::PrattParser;
-
-lazy_static! {
-    static ref PRATT_PARSER: PrattParser<Rule> = {
-        use pest::pratt_parser::{Assoc::*, Op};
-        use Rule::*;
-
-        PrattParser::new()
-            .op(Op::infix(add, Left) | Op::infix(subtract, Left))
-            .op(Op::infix(multiply, Left))
-    };
-}
-
-fn parse2(expression: Pairs<Rule>) -> Ex {
-    use Expr::*;
-    PRATT_PARSER
-        .map_primary(|primary| match primary.as_rule() {
-            Rule::dec => (
-                Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 10).unwrap()),
-                true,
-            ),
-            Rule::hex => (
-                Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 16).unwrap()),
-                true,
-            ),
-            Rule::var => (Var(primary.as_str().to_string()), true),
-            Rule::neg => (Neg(Box::new(parse2(primary.into_inner()))), true),
-            Rule::expr => (parse2(primary.into_inner()), false),
-            _ => unreachable!(),
-        })
-        // lcont and rcont tell wether the lhs and rhs terms belong to the same expr or not
-        .map_infix(|(lhs, lcont), op, (rhs, rcont)| {
-            (
-                match op.as_rule() {
-                    Rule::add => match (lhs, lcont & rcont) {
-                        (Sum(mut es), true) => {
-                            es.push(rhs);
-                            Sum(es)
-                        }
-                        (lhs, _) => Sum(vec![lhs, rhs]),
-                    },
-                    Rule::subtract => match (lhs, lcont & rcont) {
-                        (Sum(mut es), true) => {
-                            es.push(Neg(Box::new(rhs)));
-                            Sum(es)
-                        }
-                        (lhs, _) => Sum(vec![lhs, Neg(Box::new(rhs))]),
-                    },
-                    Rule::multiply => match (lhs, lcont & rcont) {
-                        (Mul(mut es), true) => {
-                            es.push(rhs);
-                            Mul(es)
-                        }
-                        (lhs, _) => Mul(vec![lhs, rhs]),
-                    },
-                    _ => unreachable!(),
-                },
-                true,
-            )
-        })
-        .parse(expression)
-        .0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use Expr::*;
 
-    #[test]
-    fn test_parse1() {
-        // dbg!(parse("1 + 2 + 3  +  0x12 * a +  32 *a*b"));
-        dbg!(parse("(1 + 2) + 3"));
-    }
-
-    #[test]
-    fn test_parse2() {
-        let r = ExprParser::parse(Rule::expr, "(-1 + 2)");
-        dbg!(&r);
-        let e = parse2(r.unwrap());
-        println!("{:?}", e);
-        println!("{}", e);
-    }
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
 
     fn c(v: u64) -> Expr<&'static str> {
         Const(BigUint::from(v))
+    }
+
+    #[test]
+    fn test_scratch() {
+        let p = BigUint::from(0x1_00_00u64);
+        // let e = c(2) * c(3) * Var("a") + c(5) + c(5) + Var("b");
+        // let e = c(2) * c(3) + c(3) * c(4) + c(5) + c(5) + c(6) + Var("a");
+        // let e = (c(2) + Var("a")) * (c(3) + Var("b")) + ((c(4) + Var("c")) * (c(5) + Var("d")));
+        // let e = (c(2) - c(1)) * Var("a");
+        // let e = (c(1) - c(2)) * Var("a");
+        // let e = (c(0xffff)) - (c(0xff00) - (-c(123))) * Var("a");
+        // let e = Var("a") - Var("b");
+        // let e = c(5) * (Var("a") * (c(1) - c(2)) * Var("b") + Var("c"));
+        let mut rng = ChaCha20Rng::seed_from_u64(9);
+        let e = Expr::rand(&mut rng, &p);
+        println!("raw e: {:?}", e);
+        let mut s = String::new();
+        e.fmt_ascii(&mut s).unwrap();
+        println!("e: {}", s);
+
+        let e = e.clone().normalize(&p);
+        s.clear();
+        e.fmt_ascii(&mut s).unwrap();
+        println!("e.normalize: {}", s);
+
+        let e = e.simplify(&p);
+        println!("raw e.normalize: {:?}", e);
+        s.clear();
+        e.fmt_ascii(&mut s).unwrap();
+        println!("e.simplify: {}", s);
+
+        let e = e.normalize(&p);
+        s.clear();
+        e.fmt_ascii(&mut s).unwrap();
+        println!("e.normalize: {}", s);
     }
 
     #[test]
@@ -785,7 +571,6 @@ mod tests {
                 .map(|i| (&VARS[i..i + 1], rand(&mut rng, &p)))
                 .collect()
         };
-        // dbg!(&vars);
         let mut rng = ChaCha20Rng::seed_from_u64(0);
         for i in 0..1024 {
             let e1 = Expr::rand(&mut rng, &p);
@@ -813,7 +598,6 @@ mod tests {
                 .map(|i| (&VARS[i..i + 1], rand(&mut rng, &p)))
                 .collect()
         };
-        // dbg!(&vars);
         let mut rng = ChaCha20Rng::seed_from_u64(0);
         for _i in 0..1024 {
             let e1 = Expr::rand_depth(&mut rng, &p, 3);
@@ -821,6 +605,34 @@ mod tests {
             let eval1 = e1.eval(&p, &vars);
             let eval2 = e2.eval(&p, &vars);
             assert_eq!(eval1, eval2);
+        }
+    }
+
+    #[test]
+    fn test_vars() {
+        let e = c(2) * c(3) * Var("a") + c(5) + c(5) + Var("b") + (Var("b") + c(3)) * Var("c");
+        let vars = e.vars();
+        let mut vars_vec = vars.into_iter().collect::<Vec<_>>();
+        vars_vec.sort();
+        assert_eq!(vars_vec, vec!["a", "b", "c"])
+    }
+}
+
+#[cfg(test)]
+mod tests_with_parser {
+    use super::*;
+    use crate::parser::parse;
+
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+
+    #[test]
+    fn test_test_eq() {
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
+        for (e1_str, e2_str) in [("(a - 5)*(a - 7)", "a*a - a*7 - a*5 + 35")] {
+            let e1 = parse(e1_str).unwrap();
+            let e2 = parse(e2_str).unwrap();
+            assert!(e1.test_eq(&mut rng, &e2))
         }
     }
 }
