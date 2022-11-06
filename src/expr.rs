@@ -17,12 +17,12 @@ use std::ops::{Add, Mul, Neg, Sub};
 //     fn is_one(&self) -> bool;
 // }
 
-pub trait Var: Clone + Debug + Display {}
+pub trait Var: Clone + Debug + Display + PartialEq {}
 
 impl Var for &'static str {}
 impl Var for String {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr<V: Var> {
     Const(BigUint),
     Var(V),
@@ -30,6 +30,8 @@ pub enum Expr<V: Var> {
     Mul(Vec<Expr<V>>),
     Neg(Box<Expr<V>>),
 }
+
+pub type Ex = Expr<String>;
 
 fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> BigUint {
     rng.gen_biguint_below(p)
@@ -162,11 +164,11 @@ impl<V: Var> PartialOrd for Expr<V> {
     }
 }
 
-impl<V: Var> PartialEq for Expr<V> {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
+// impl<V: Var> PartialEq for Expr<V> {
+//     fn eq(&self, _other: &Self) -> bool {
+//         true
+//     }
+// }
 
 impl<V: Var> Eq for Expr<V> {}
 
@@ -621,7 +623,7 @@ mod tests {
 #[cfg(test)]
 mod tests_with_parser {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::parse_expr;
 
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
@@ -630,8 +632,8 @@ mod tests_with_parser {
     fn test_test_eq() {
         let mut rng = ChaCha20Rng::seed_from_u64(0);
         for (e1_str, e2_str) in [("(a - 5)*(a - 7)", "a*a - a*7 - a*5 + 35")] {
-            let e1 = parse(e1_str).unwrap();
-            let e2 = parse(e2_str).unwrap();
+            let e1 = parse_expr(e1_str).unwrap();
+            let e2 = parse_expr(e2_str).unwrap();
             assert!(e1.test_eq(&mut rng, &e2))
         }
     }

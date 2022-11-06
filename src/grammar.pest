@@ -11,7 +11,7 @@ operation = _{ add | subtract | multiply }
 
 expr = { term ~ (operation ~ term)* }
 term = _{ neg | subterm }
-neg = ${ "-" ~ subterm }
+neg = { "-" ~ subterm }
 subterm = _{ num | var | "(" ~ expr ~ ")" }
 
 calculation = _{ SOI ~ expr ~ EOI }

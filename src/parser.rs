@@ -1,8 +1,6 @@
-use crate::expr::Expr;
+use crate::expr::{Ex, Expr};
 
 use num_bigint::BigUint;
-
-pub type Ex = Expr<String>;
 
 extern crate pest;
 
@@ -25,7 +23,7 @@ lazy_static! {
     };
 }
 
-pub fn parse_pairs(expression: Pairs<Rule>) -> Ex {
+pub fn parse_expr_pairs(expression: Pairs<Rule>) -> Ex {
     use Expr::*;
     PRATT_PARSER
         .map_primary(|primary| match primary.as_rule() {
@@ -38,8 +36,8 @@ pub fn parse_pairs(expression: Pairs<Rule>) -> Ex {
                 true,
             ),
             Rule::var => (Var(primary.as_str().to_string()), true),
-            Rule::neg => (Neg(Box::new(parse_pairs(primary.into_inner()))), true),
-            Rule::expr => (parse_pairs(primary.into_inner()), false),
+            Rule::neg => (Neg(Box::new(parse_expr_pairs(primary.into_inner()))), true),
+            Rule::expr => (parse_expr_pairs(primary.into_inner()), false),
             _ => unreachable!(),
         })
         // lcont and rcont tell wether the lhs and rhs terms belong to the same expr or not
@@ -76,21 +74,39 @@ pub fn parse_pairs(expression: Pairs<Rule>) -> Ex {
         .0
 }
 
-pub fn parse(src: &str) -> Result<Ex, Error<Rule>> {
+pub fn parse_expr(src: &str) -> Result<Ex, Error<Rule>> {
     let r = ExprParser::parse(Rule::expr, src)?;
-    Ok(parse_pairs(r))
+    Ok(parse_expr_pairs(r))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Expr::*;
+
+    fn c(v: u64) -> Expr<String> {
+        Const(BigUint::from(v))
+    }
 
     #[test]
     fn test_parse() {
-        let r = ExprParser::parse(Rule::expr, "(-1 + 2)");
-        dbg!(&r);
-        let e = parse_pairs(r.unwrap());
-        println!("{:?}", e);
-        println!("{}", e);
+        for (e_str, e_expected) in [
+            ("123", c(123)),
+            ("-123", Neg(Box::new(c(123)))),
+            ("0x42", c(0x42)),
+            ("-0x42", Neg(Box::new(c(0x42)))),
+            ("3 + 5", c(3) + c(5)),
+            ("3 + 5 * a", c(3) + c(5) * Var("a".to_string())),
+            ("(3 + 5) + 2", Sum(vec![c(3) + c(5), c(2)])),
+            ("-(1 + 2)", Neg(Box::new(c(1) + c(2)))),
+        ] {
+            let e = parse_expr(e_str).unwrap();
+            assert_eq!(e, e_expected, "{}", e_str);
+        }
+        // let r = ExprParser::parse(Rule::expr, "-(-1 + 2)");
+        // dbg!(&r);
+        // let e = parse_expr_pairs(r.unwrap());
+        // println!("{:?}", e);
+        // println!("{}", e);
     }
 }
