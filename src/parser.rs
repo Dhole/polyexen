@@ -115,6 +115,15 @@ mod tests {
                     Sum(vec![c(9), c(2)]),
                 ]),
             ),
+            (
+                "9 * 0 + 9 * 1 + 9 * 2 - 9 * 3",
+                Sum(vec![
+                    Mul(vec![c(9), c(0)]),
+                    Mul(vec![c(9), c(1)]),
+                    Mul(vec![c(9), c(2)]),
+                    Neg(Box::new(Mul(vec![c(9), c(3)]))),
+                ]),
+            ),
         ] {
             let e = parse_expr(e_str).unwrap();
             assert_eq!(e, e_expected, "{}", e_str);
