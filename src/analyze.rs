@@ -1,13 +1,136 @@
 use crate::expr::{Ex, Expr};
 
-use num_bigint::{BigInt, BigUint};
-use num_traits::{One, Zero};
+use num_bigint::{BigInt, BigUint, Sign};
+use num_traits::{cast::ToPrimitive, One, Zero};
+use std::collections::{HashMap, HashSet};
+
+#[derive(Debug, Clone)]
+pub enum Bound {
+    Range(BigUint, BigUint), // x in [start..end]
+    Set(Vec<BigUint>),       // non contiguous set
+}
+
+impl Bound {
+    // TODO: Replace set by Iter
+    pub fn new<I: IntoIterator<Item = BigUint>>(iter: I) -> Self {
+        let one = BigUint::from(1u64);
+        let mut set: Vec<BigUint> = iter.into_iter().collect();
+        set.sort();
+        let mut inc = set[0].clone();
+        for v in &set {
+            if *v != inc {
+                return Self::Set(set);
+            }
+            inc += &one;
+        }
+        Self::Range(set[0].clone(), set[set.len() - 1].clone())
+    }
+    pub fn new_bool() -> Self {
+        Self::Range(BigUint::from(0u64), BigUint::from(1u64))
+    }
+    pub fn new_u8() -> Self {
+        Self::Range(BigUint::from(0u64), BigUint::from(0xffu64))
+    }
+    pub fn new_u16() -> Self {
+        Self::Range(BigUint::from(0u64), BigUint::from(0xff_ffu64))
+    }
+
+    pub fn range_u64(&self) -> Option<(u64, u64)> {
+        if let Self::Range(start, end) = self {
+            if let (Some(start), Some(end)) = (start.to_u64(), end.to_u64()) {
+                Some((start, end))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn is_bool(&self) -> bool {
+        if let Some((0, 1)) = self.range_u64() {
+            true
+        } else {
+            false
+        }
+    }
+    pub fn is_u8(&self) -> bool {
+        if let Some((0, 0xff)) = self.range_u64() {
+            true
+        } else {
+            false
+        }
+    }
+    pub fn is_u16(&self) -> bool {
+        if let Some((0, 0xff_ff)) = self.range_u64() {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Attrs {
+    pub bound: Bound,
+}
+
+#[derive(Debug)]
+pub struct Analysis {
+    pub vars_attrs: HashMap<String, Attrs>,
+}
+
+impl Analysis {
+    pub fn new() -> Self {
+        Self {
+            vars_attrs: HashMap::new(),
+        }
+    }
+}
+
+fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
+    let (sign, c) = c.into_parts();
+    if sign == Sign::Minus {
+        p - c
+    } else {
+        c
+    }
+}
+
+pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
+    let (exhaustive, solutions) = find_solutions(e);
+    let mut var: Option<String> = None;
+    let mut sols = Vec::new();
+    for (v, c) in solutions {
+        if let Some(prev_v) = &var {
+            if v != *prev_v {
+                var = None;
+                break;
+            }
+        } else {
+            var = Some(v);
+        }
+        sols.push(c);
+    }
+    if let Some(var) = var {
+        if let Some(attrs) = analysis.vars_attrs.get(&var) {
+            unimplemented!();
+        } else {
+            analysis.vars_attrs.insert(
+                var,
+                Attrs {
+                    bound: Bound::new(sols.into_iter().map(|c| to_biguint(c, p))),
+                },
+            );
+        }
+    }
+}
 
 // Attempt to find solutions to `e(X) == 0` by matching on the pattern `(x - A)(y - B)...`.
 // Returns true when the solutions returned are exhaustive.
 pub fn find_solutions(e: &Ex) -> (bool, Vec<(String, BigInt)>) {
     use Expr::*;
     fn find_solutions_base(e: &Ex) -> (bool, Vec<(String, BigInt)>) {
+        dbg!(&e);
         match e {
             Const(_) => (true, Vec::new()),
             Var(v) => (true, vec![(v.clone(), BigInt::zero())]),
@@ -74,6 +197,11 @@ mod tests_with_parser {
             ("(-a + 5) * (-a - 7)", vec![("a", "5"), ("a", "-7")], true),
             ("(a - 3) * -(a - 4)", vec![("a", "3"), ("a", "4")], true),
             ("(a - 3) * (a + b - 4)", vec![("a", "3")], false),
+            (
+                "(a - 0) * (a - 1) * (a - 2) * (a - 3)",
+                vec![("a", "0"), ("a", "1"), ("a", "2"), ("a", "3")],
+                false,
+            ),
         ] {
             let e = parse_expr(e_str).unwrap();
             let mut expected_solutions = Vec::new();
@@ -89,5 +217,21 @@ mod tests_with_parser {
             assert_eq!(exhaustive, expected_exh);
             assert_eq!(solutions, expected_solutions, "{}", e_str);
         }
+    }
+
+    #[test]
+    fn test_find_bounds_poly() {
+        let p = BigUint::parse_bytes(b"100000000000000000000000000000000", 16).unwrap()
+            - BigUint::from(159u64);
+
+        let poly1 = parse_expr("(a - 0) * (a - 1)").unwrap();
+        let mut analysis = Analysis::new();
+        find_bounds_poly(&poly1, &p, &mut analysis);
+        dbg!(&analysis);
+
+        let poly2 = parse_expr("(a - 0) * (a - 1) * (a - 2) * (a - 3)").unwrap();
+        let mut analysis = Analysis::new();
+        find_bounds_poly(&poly2, &p, &mut analysis);
+        dbg!(&analysis);
     }
 }

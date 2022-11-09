@@ -99,6 +99,14 @@ mod tests {
             ("3 + 5 * a", c(3) + c(5) * Var("a".to_string())),
             ("(3 + 5) + 2", Sum(vec![c(3) + c(5), c(2)])),
             ("-(1 + 2)", Neg(Box::new(c(1) + c(2)))),
+            (
+                "(9 + 0) * (9 + 1) * (9 + 2)",
+                Mul(vec![
+                    Sum(vec![c(9), c(0)]),
+                    Sum(vec![c(9), c(1)]),
+                    Sum(vec![c(9), c(2)]),
+                ]),
+            ),
         ] {
             let e = parse_expr(e_str).unwrap();
             assert_eq!(e, e_expected, "{}", e_str);
