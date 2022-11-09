@@ -44,26 +44,34 @@ pub fn parse_expr_pairs(expression: Pairs<Rule>) -> Ex {
         .map_infix(|(lhs, lcont), op, (rhs, rcont)| {
             (
                 match op.as_rule() {
-                    Rule::add => match (lhs, lcont & rcont) {
-                        (Sum(mut es), true) => {
+                    Rule::add => match (lhs, rhs, lcont & rcont) {
+                        (Sum(mut es), rhs, true) => {
                             es.push(rhs);
                             Sum(es)
                         }
-                        (lhs, _) => Sum(vec![lhs, rhs]),
+                        (Sum(mut lhs_es), Mul(rhs_es), _) => {
+                            lhs_es.push(Mul(rhs_es));
+                            Sum(lhs_es)
+                        }
+                        (lhs, rhs, _) => Sum(vec![lhs, rhs]),
                     },
-                    Rule::subtract => match (lhs, lcont & rcont) {
-                        (Sum(mut es), true) => {
+                    Rule::subtract => match (lhs, rhs, lcont & rcont) {
+                        (Sum(mut es), rhs, true) => {
                             es.push(Neg(Box::new(rhs)));
                             Sum(es)
                         }
-                        (lhs, _) => Sum(vec![lhs, Neg(Box::new(rhs))]),
+                        (lhs, rhs, _) => Sum(vec![lhs, Neg(Box::new(rhs))]),
                     },
-                    Rule::multiply => match (lhs, lcont & rcont) {
-                        (Mul(mut es), true) => {
+                    Rule::multiply => match (lhs, rhs, lcont & rcont) {
+                        (Mul(mut es), rhs, true) => {
                             es.push(rhs);
                             Mul(es)
                         }
-                        (lhs, _) => Mul(vec![lhs, rhs]),
+                        (Mul(mut lhs_es), Sum(rhs_es), _) => {
+                            lhs_es.push(Sum(rhs_es));
+                            Mul(lhs_es)
+                        }
+                        (lhs, rhs, _) => Mul(vec![lhs, rhs]),
                     },
                     _ => unreachable!(),
                 },

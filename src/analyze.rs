@@ -130,7 +130,6 @@ pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
 pub fn find_solutions(e: &Ex) -> (bool, Vec<(String, BigInt)>) {
     use Expr::*;
     fn find_solutions_base(e: &Ex) -> (bool, Vec<(String, BigInt)>) {
-        dbg!(&e);
         match e {
             Const(_) => (true, Vec::new()),
             Var(v) => (true, vec![(v.clone(), BigInt::zero())]),
@@ -227,11 +226,17 @@ mod tests_with_parser {
         let poly1 = parse_expr("(a - 0) * (a - 1)").unwrap();
         let mut analysis = Analysis::new();
         find_bounds_poly(&poly1, &p, &mut analysis);
-        dbg!(&analysis);
+        assert_eq!(
+            analysis.vars_attrs.get("a").unwrap().bound.range_u64(),
+            Some((0, 1))
+        );
 
         let poly2 = parse_expr("(a - 0) * (a - 1) * (a - 2) * (a - 3)").unwrap();
         let mut analysis = Analysis::new();
         find_bounds_poly(&poly2, &p, &mut analysis);
-        dbg!(&analysis);
+        assert_eq!(
+            analysis.vars_attrs.get("a").unwrap().bound.range_u64(),
+            Some((0, 3))
+        );
     }
 }
