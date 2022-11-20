@@ -66,7 +66,51 @@ CONSTRAIN(not(e: booly))
 
 > e == 0
 
+# DSL design notes
+
+This is a list of features that the DSL should optimize for
+- Constraint definition and witness assignment should be done together
+- Should not expose rotations, only variables (advices, constants?) and expressions.
+- Should add gadget selectors implicitly
+- Should allow modeling state machines gadgets
+- Should make it easy to add negative tests
+- A constraint checker should report the line and trace (in case of nested
+  gadgets) of a failing constraint along with the values used in that
+  constraint
+- Advice and Expressions can be typed, and a checker will verify that the types
+  are correct.
+
+This is a list of nice to have features
+- Witness assignment should be done automatically when possible
+
+Open questions:
+- How is composition modeled?
+- How are dynamic lookups modeled?  What about composition via dynamic lookups?
+- How does it work with the challenge API?
+
+# Embeddable scripting languages for Rust
+
+- https://github.com/pistondevelopers/dyon
+- https://github.com/gluon-lang/gluon
+- https://github.com/rune-rs/rune
+- https://github.com/rhaiscript/rhai
+
 # Gadgets
+
+Aux
+
+```
+let from_bytes_le = |bytes| bytes.zip(0..bytes.len()).map(|(b, i)| b * 2.pow(8 * i)).sum();
+
+fn from_bytes_le(bytes: &[T]) -> T {
+    let mut res = 0;
+    for i in 0..bytes.len() {
+        res += b * 2.pow(8 * i)
+    }
+    res
+}
+```
+
 
 ## IsZero
 
@@ -103,21 +147,24 @@ outputs:
 - `lt: bool`
 
 ```
-gadget lt(N: usize)(lhs: range(0, 2.pow(8*N)) expr, rhs: range(0, 2.pow(8*N)) expr) -> bool advice {
+gadget lt(N: usize, lhs: range(0, 2.pow(8*N)) expr, rhs: range(0, 2.pow(8*N)) expr) -> bool advice {
     let lt: bool advice;
     witness {
         lt = lhs < rhs;
     }
-    constrain_bool(lt);
+    @ lt in bool;
     let diff_bytes: [u8 advice; N];
+    for i in 0..N {
+        @ diff_bytes[i] in u8
+    }
     witness {
         let diff: field = (lhs - rhs) + if lt { 2.pow(8*N) } else { 0 };
         for i in 0..N {
             diff_bytes[i] = (diff >> 8*i) & 0xff;
         }
     }
-    let diff: range(0, 2.pow(8*N) expr = diff_bytes.zip(0..N).map(|(b, i)| b * 2.pow(8 * i)).sum();
-    constrain_zero(lhs - rhs - diff + lt * 2.pow(8*N));
+    let diff: range(0, 2.pow(8*N) expr = from_bytes_le(diff_bytes);
+    @ lhs - rhs = diff - lt * 2.pow(8*N);
     return lt;
 }
 ```
@@ -130,22 +177,34 @@ inputs:
 
 ```
 alias u128 = range(0, 2.pow(128));
-gadget add256(a: [u8 expr; 32], b: [u8 expr; 32]) -> [u8 expr; 32] {
-    let from_bytes_le = |bytes| bytes.zip(0..bytes.len()).map(|(b, i)| b * 2.pow(8 * i)).sum();
-    let sum: [u8 advice; 32];
+gadget add256(a_le: [u8 expr; 32], b_le: [u8 expr; 32]) -> ([u8 advice; 32], bool advice) {
+    let res_le: [u8 advice; 32];
     let carry_lo: range(0, 1) advice;
     let carry_hi: range(0, 1) advice;
-    let a_lo: u128 expr = from_bytes_le(a[..16]);
-    let b_lo: u128 expr = from_bytes_le(b[..16]);
-    let a_hi: u128 expr = from_bytes_le(a[16..]);
-    let b_hi: u128 expr = from_bytes_le(b[16..]);
-    let sum_lo: u128 expr = from_bytes_le(sum[..16]);
-    let sum_hi: u128 expr = from_bytes_le(sum[16..]);
-    constrain_eq(a_lo + b_lo, sum_lo + carry_lo * 2.pow(128));
-    constrain_eq(a_hi + b_hi + carry_lo, sum_hi + carry_hi * 2.pow(128));
-    constrain_in(carry_lo, [0, 1]);
-    constrain_in(carry_hi, [0, 1]);
-    return sum;
+    witness {
+        let mut carry = 0;
+        for i in 0..32 {
+            let tmp = a_le[i] + b_le[i];
+            res_le[i] = tmp & 0xff + carry;
+            carry = tmp >> 8;
+            if i == 15 {
+                carry_lo = carry;
+            }
+        }
+        carry_hi = carry;
+    }
+
+    let a_lo: u128 expr = from_bytes_le(a_le[..16]);
+    let b_lo: u128 expr = from_bytes_le(b_le[..16]);
+    let a_hi: u128 expr = from_bytes_le(a_le[16..]);
+    let b_hi: u128 expr = from_bytes_le(b_le[16..]);
+    let res_lo: u128 expr = from_bytes_le(res_le[..16]);
+    let res_hi: u128 expr = from_bytes_le(res_le[16..]);
+    @ a_lo + b_lo = res_lo + carry_lo * 2.pow(128);
+    @ a_hi + b_hi + carry_lo = res_hi + carry_hi * 2.pow(128);
+    @ carry_lo in [0, 1];
+    @ carry_hi in [0, 1];
+    return res_le;
 }
 ```
 
