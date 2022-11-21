@@ -2,20 +2,27 @@ use crate::expr::{Ex, Expr};
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{cast::ToPrimitive, One, Zero};
+use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub enum Bound {
     Range(BigUint, BigUint), // x in [start..end]
-    Set(Vec<BigUint>),       // non contiguous set
+    Set(Vec<BigUint>),       // non contiguous set, always sorted
 }
 
 impl Bound {
-    // TODO: Replace set by Iter
     pub fn new<I: IntoIterator<Item = BigUint>>(iter: I) -> Self {
         let one = BigUint::from(1u64);
         let mut set: Vec<BigUint> = iter.into_iter().collect();
         set.sort();
+        if set.len() == 0 {
+            return Self::Set(vec![]);
+        } else if set.len() == 1 {
+            return Self::Set(vec![set[0].clone()]);
+        } else if set.len() == 2 {
+            return Self::Set(vec![set[0].clone(), set[1].clone()]);
+        }
         let mut inc = set[0].clone();
         for v in &set {
             if *v != inc {
@@ -33,6 +40,35 @@ impl Bound {
     }
     pub fn new_u16() -> Self {
         Self::Range(BigUint::from(0u64), BigUint::from(0xff_ffu64))
+    }
+    pub fn new_range(min: BigUint, max: BigUint) -> Self {
+        Self::Range(min, max)
+    }
+
+    pub fn intersection(&mut self, other: &Self) {
+        use Bound::*;
+        match (&self, other) {
+            (Range(a, b), Range(c, d)) => {
+                let a: &BigUint = a;
+                let b: &BigUint = b;
+                let min = a.max(c);
+                let max = b.min(d);
+                if min <= max {
+                    *self = Range(min.clone(), max.clone());
+                } else {
+                    *self = Set(vec![]);
+                }
+            }
+            (Set(a), Set(b)) => {
+                let a: HashSet<&BigUint, RandomState> = HashSet::from_iter(a.iter());
+                let b: HashSet<&BigUint, RandomState> = HashSet::from_iter(b.iter());
+                let intersection = a.intersection(&b);
+                *self = Set(intersection.map(|v| (*v).clone()).collect());
+            }
+            (Range(min, max), Set(s)) | (Set(s), Range(min, max)) => {
+                *self = Self::new(s.iter().filter(|v| &min <= v && v <= &max).cloned());
+            }
+        }
     }
 
     pub fn range_u64(&self) -> Option<(u64, u64)> {
@@ -100,16 +136,18 @@ pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
     let (exhaustive, solutions) = find_solutions(e);
     let mut var: Option<String> = None;
     let mut sols = Vec::new();
-    for (v, c) in solutions {
-        if let Some(prev_v) = &var {
-            if v != *prev_v {
-                var = None;
-                break;
+    if exhaustive {
+        for (v, c) in &solutions {
+            if let Some(prev_v) = &var {
+                if v != prev_v {
+                    var = None;
+                    break;
+                }
+            } else {
+                var = Some(v.clone());
             }
-        } else {
-            var = Some(v);
+            sols.push(c);
         }
-        sols.push(c);
     }
     if let Some(var) = var {
         if let Some(attrs) = analysis.vars_attrs.get(&var) {
@@ -118,7 +156,16 @@ pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
             analysis.vars_attrs.insert(
                 var,
                 Attrs {
-                    bound: Bound::new(sols.into_iter().map(|c| to_biguint(c, p))),
+                    bound: Bound::new(sols.into_iter().map(|c| to_biguint(c.clone(), p))),
+                },
+            );
+        }
+    } else {
+        for (v, _) in solutions {
+            analysis.vars_attrs.insert(
+                v,
+                Attrs {
+                    bound: Bound::new_range(BigUint::zero(), p.clone() - BigUint::one()),
                 },
             );
         }
@@ -238,5 +285,15 @@ mod tests_with_parser {
             analysis.vars_attrs.get("a").unwrap().bound.range_u64(),
             Some((0, 3))
         );
+    }
+
+    #[test]
+    fn test_carlos() {
+        let p = BigUint::parse_bytes(b"100000000000000000000000000000000", 16).unwrap()
+            - BigUint::from(159u64);
+        let poly1 = parse_expr("(x - 4) * (x - 1) * x * (x - 2) * (x - 3)").unwrap();
+        let mut analysis = Analysis::new();
+        find_bounds_poly(&poly1, &p, &mut analysis);
+        println!("{:?}", &analysis);
     }
 }

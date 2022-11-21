@@ -123,7 +123,7 @@ outputs:
 
 ```
 gadget iz_zero(value: expr) -> bool expr {
-    let value_inv: advice;
+    let value_inv: witness;
     witness {
         value_inv = if value != 0 {
             value.invert();
@@ -132,7 +132,7 @@ gadget iz_zero(value: expr) -> bool expr {
         };
     }
     let is_zero_expression: bool expr = 1 - value * value_inv;
-    constrain_zero(value * value_inv); 
+    @ value * value_inv = 0;
     return is_zero_expression;
 }
 ```
@@ -147,23 +147,20 @@ outputs:
 - `lt: bool`
 
 ```
-gadget lt(N: usize, lhs: range(0, 2.pow(8*N)) expr, rhs: range(0, 2.pow(8*N)) expr) -> bool advice {
-    let lt: bool advice;
+gadget lt(N: usize, lhs: T2P8 expr, rhs: T2P8 expr) -> bool witness 
+    where T2P8 is range(0, 2.pow(8*N)) {
+    let lt: bool witness;
     witness {
         lt = lhs < rhs;
     }
-    @ lt in bool;
-    let diff_bytes: [u8 advice; N];
-    for i in 0..N {
-        @ diff_bytes[i] in u8
-    }
+    let diff_bytes: [u8 witness; N];
     witness {
         let diff: field = (lhs - rhs) + if lt { 2.pow(8*N) } else { 0 };
         for i in 0..N {
             diff_bytes[i] = (diff >> 8*i) & 0xff;
         }
     }
-    let diff: range(0, 2.pow(8*N) expr = from_bytes_le(diff_bytes);
+    let diff: T2P8 expr = from_bytes_le(diff_bytes);
     @ lhs - rhs = diff - lt * 2.pow(8*N);
     return lt;
 }
@@ -177,10 +174,10 @@ inputs:
 
 ```
 alias u128 = range(0, 2.pow(128));
-gadget add256(a_le: [u8 expr; 32], b_le: [u8 expr; 32]) -> ([u8 advice; 32], bool advice) {
-    let res_le: [u8 advice; 32];
-    let carry_lo: range(0, 1) advice;
-    let carry_hi: range(0, 1) advice;
+gadget add256(a_le: [u8 expr; 32], b_le: [u8 expr; 32]) -> ([u8 witness; 32], bool witness) {
+    let res_le: [u8 witness; 32];
+    let carry_lo: range(0, 1) witness;
+    let carry_hi: range(0, 1) witness;
     witness {
         let mut carry = 0;
         for i in 0..32 {
@@ -202,8 +199,6 @@ gadget add256(a_le: [u8 expr; 32], b_le: [u8 expr; 32]) -> ([u8 advice; 32], boo
     let res_hi: u128 expr = from_bytes_le(res_le[16..]);
     @ a_lo + b_lo = res_lo + carry_lo * 2.pow(128);
     @ a_hi + b_hi + carry_lo = res_hi + carry_hi * 2.pow(128);
-    @ carry_lo in [0, 1];
-    @ carry_hi in [0, 1];
     return res_le;
 }
 ```
