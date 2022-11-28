@@ -94,6 +94,7 @@ Open questions:
 - https://github.com/gluon-lang/gluon
 - https://github.com/rune-rs/rune
 - https://github.com/rhaiscript/rhai
+- https://github.com/RustPython/RustPython
 
 # Gadgets
 
@@ -203,3 +204,140 @@ gadget add256(a_le: [u8 expr; 32], b_le: [u8 expr; 32]) -> ([u8 witness; 32], bo
 }
 ```
 
+## Bytecode circuit
+
+An example of a state machine + lookupable table circuit
+
+https://hackmd.io/Cv5Pmh8fRyuuuwCFcCZdzg
+
+Types: 
+- Tag: enum{ Length, Byte }
+- Word: [u128, u128]
+
+BytecodeLookup:
+- codeHash: Word
+- tag: Tag
+- index: u16
+- value: u8
+
+State:
+- tag: Tag
+- length: u16
+- index: u16
+- value: u8
+- is_code: bool
+- push_data_size: u16
+- push_data_left: u16
+- hash: Word
+- values_rlc: field
+- is_first: bool fixed
+- is_last: bool fixed
+
+Witness: list of State structs with the following values defined:
+- tag
+- if tag == Length
+    - length
+    - hash
+- if tag == Byte
+    - value
+
+```
+circuit bytecode(curr: State, next: State) {
+    // Length state validation
+    if curr.tag == Length {
+        @ curr.index = 0;
+        @ curr.value = curr.length;
+        if curr.length == 0 {
+            @ curr.hash = EMPTY_HASH;
+        }
+    }
+    // Byte state validation
+    if curr.tag == Byte {
+        @ curr.push_data_size = push_data_size_table[curr.value];
+        @ curr.is_code = (curr.push_data_left == 0);
+        if curr.is_code {
+            @ next.push_data_left = curr.push_data_size;
+        } else {
+            @ next.push_data_left = curr.push_data_left - 1;
+        }
+    }
+
+    // Start state
+    if curr.is_first {
+        @ curr.tag = Tag.Length;
+    } 
+    // End state
+    if curr.is_last {
+        @ curr.tag = Tag.Length;
+    }
+
+    // State transition validation
+    if !curr.is_last {
+        // Length -> Byte
+        if curr.tag == Length and next.tag == Byte {
+            @ next.length = curr.length;
+            @ next.index = 0;
+            @ next.is_code = 1;
+            @ next.hash = curr.hash;
+            @ next.values_rlc = next.value;
+            @ next.value = any;
+            @ next.push_data_left = any;
+        }
+
+        // Length -> Length
+        if curr.tag == Length and next.tag == Length {
+            @ curr.length = 0;
+            @ curr.hash = EMPTY_HASH;
+            @ next.length = any;
+            @ next.index = any;
+            @ next.value = any;
+            @ next.is_code = any;
+            @ next.push_data_left = any;
+            @ next.hash = any;
+            @ next.values_rlc = any;
+        }
+
+        // Byte -> Byte
+        if curr.tag == Byte and next.tag == Byte {
+            @ next.length = curr.length;
+            @ next.index = curr.index + 1;
+            @ next.hash = curr.hash;
+            @ next.values_rlc = curr.values_rlc * randomness + curr.value;
+            @ next.value = any;
+        }
+
+        // Byte -> Length
+        if curr.tag == Byte and next.tag == Length {
+            @ curr.index = curr.length - 1;
+            @ curr.hash = keccak256[curr.values_rlc, curr.length];
+            @ next.length = any;
+            @ next.index = any;
+            @ next.value = any;
+            @ next.hash = any;
+            @ next.values_rlc = any;
+        }
+    }
+}
+```
+
+Exercice: write a function that given a list of byte vectors, generates the list of Bytecode
+circuit states.
+
+```
+fn gen(inputs: &[Vec<u8>]) -> Vec<State> {
+    let mut states = Vec::new();
+    for input in inputs {
+        states.push(State{
+            tag: Lenght,
+            value: input.len(),
+            hash: rlc(r, hash(input)),
+        });
+        for byte in input {
+            states.push(State{
+                tag: Byte,
+                value: byte,
+            });
+        }
+    }
+}
+```
