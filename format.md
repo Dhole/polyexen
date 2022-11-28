@@ -1,6 +1,10 @@
 # plaf: Plonkish Arithmetization Format
 
 ```
+[info]
+name = "Circuit Foo"
+size = 4096 # k = 12
+
 [columns.witness]
 w0 = {}
 w1 = {}
@@ -21,9 +25,15 @@ q3 = {}
 [constraints.lookup]
 "lookup 1" = [["w0", "w1"], ["w2[0]", "w2[1]"]]
 "lookup 2" = [["w0", "w0 + w1"], ["w2 + w2", "q0 * w2"]]
-```
 
-- How do we encode the copy constraints?  They can vary with `k`!
+[[constraints.copy]]
+columns = ["w0", "w1"]
+offsets = [[0, 10], [1, 11], [2, 12]]
+
+[[constraints.copy]]
+columns = ["w0", "w2"]
+offsets = [[0, 1], [2, 3], [4, 5]]
+```
 
 # cova: Column Values
 
