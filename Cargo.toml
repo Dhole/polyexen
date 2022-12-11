@@ -13,6 +13,10 @@ num-integer = "0.1"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 nom = "7"
-pest = "2"
-pest_derive = "2"
+pest = "2.4"
+pest_derive = "2.4"
 lazy_static = "1.4"
+halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2022_09_10" }
+
+[patch."https://github.com/privacy-scaling-explorations/halo2.git"]
+halo2_proofs = { path = "../zkevm/halo2/halo2_proofs" }

@@ -1,6 +1,10 @@
+use halo2_proofs::{
+    halo2curves::group::ff::{Field, PrimeField},
+    plonk::Expression,
+};
 use num_bigint::{BigInt, BigUint, RandBigInt, Sign};
 use num_integer::Integer;
-use num_traits::{One, Zero};
+use num_traits::{One, ToPrimitive, Zero};
 use rand::Rng;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
 use std::collections::{HashMap, HashSet};
@@ -29,9 +33,86 @@ pub enum Expr<V: Var> {
     Sum(Vec<Expr<V>>),
     Mul(Vec<Expr<V>>),
     Neg(Box<Expr<V>>),
+    Pow(Box<Expr<V>>, BigUint),
 }
 
 pub type Ex = Expr<String>;
+
+pub fn get_field_p<F: Field + PrimeField<Repr = [u8; 32]>>() -> BigUint {
+    let p_1 = F::zero() - F::one();
+    let p_1 = BigUint::from_bytes_le(&p_1.to_repr()[..]);
+    p_1 + 1u64
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PlonkVar {
+    Witness { index: usize, rotation: i32 },
+    Instance { index: usize, rotation: i32 },
+    Fixed { index: usize, rotation: i32 },
+    Challenge { index: usize, phase: usize },
+}
+
+impl Var for PlonkVar {}
+
+impl Display for PlonkVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use PlonkVar::*;
+        match self {
+            Witness { index, rotation } => {
+                write!(f, "a{:02}", index)?;
+                if *rotation != 0 {
+                    write!(f, "[{}]", rotation)?;
+                }
+            }
+            Fixed { index, rotation } => {
+                write!(f, "f{:02}", index)?;
+                if *rotation != 0 {
+                    write!(f, "[{}]", rotation)?;
+                }
+            }
+            Instance { index, rotation } => {
+                write!(f, "i{:02}", index)?;
+                if *rotation != 0 {
+                    write!(f, "[{}]", rotation)?;
+                }
+            }
+            Challenge { index, phase } => write!(f, "ch{}_{}", index, phase)?,
+        }
+        Ok(())
+    }
+}
+
+impl<F: PrimeField<Repr = [u8; 32]>> From<&Expression<F>> for Expr<PlonkVar> {
+    fn from(e: &Expression<F>) -> Self {
+        use Expression::*;
+        match e {
+            Constant(c) => Expr::Const(BigUint::from_bytes_le(&c.to_repr()[..])),
+            Selector(_) => unreachable!("selector exoression is unsupported"),
+            Fixed(query) => Expr::Var(PlonkVar::Fixed {
+                index: query.column_index(),
+                rotation: query.rotation().0,
+            }),
+            Advice(query) => Expr::Var(PlonkVar::Witness {
+                index: query.column_index(),
+                rotation: query.rotation().0,
+            }),
+            Instance(query) => Expr::Var(PlonkVar::Instance {
+                index: query.column_index(),
+                rotation: query.rotation().0,
+            }),
+            Challenge(challenge) => Expr::Var(PlonkVar::Challenge {
+                index: challenge.index(),
+                phase: challenge.phase() as usize,
+            }),
+            Negated(e) => -Self::from(&**e),
+            Sum(e1, e2) => Self::from(&**e1) + Self::from(&**e2),
+            Product(e1, e2) => Self::from(&**e1) * Self::from(&**e2),
+            Scaled(e, c) => {
+                Expr::Const(BigUint::from_bytes_le(&c.to_repr()[..])) * Self::from(&**e)
+            }
+        }
+    }
+}
 
 fn rand<R: Rng>(rng: &mut R, p: &BigUint) -> BigUint {
     rng.gen_biguint_below(p)
@@ -154,6 +235,7 @@ impl<V: Var> Ord for Expr<V> {
             (Neg(e), Sum(_)) => (**e).cmp(other),
             (Neg(e), Mul(_)) => (**e).cmp(other),
             (Neg(e1), Neg(e2)) => (**e1).cmp(e2),
+            _ => Equal,
         }
     }
 }
@@ -231,6 +313,16 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
                 }
                 res
             }
+            Pow(e, f) => {
+                let b = e.eval(p, vars);
+                let mut res = BigUint::one();
+                let exp: u32 = f.to_u32().expect("exponent too big");
+                // TODO: Implement efficient expmod
+                for _ in 0..exp {
+                    res = mul(res, &b, p);
+                }
+                res
+            }
         }
     }
 
@@ -239,6 +331,10 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
         // p-1 == -1
         // let p_1 = p.clone() - BigUint::one();
         match self {
+            Pow(e, f) => {
+                let e = e.simplify(p);
+                Pow(Box::new(e), f)
+            }
             Neg(e) => {
                 let e = e.simplify(p);
                 match e {
@@ -246,7 +342,13 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
                     e => Neg(Box::new(e)),
                 }
             }
-            Const(f) => Const(f),
+            Const(f) => match (f.count_ones(), f.trailing_zeros()) {
+                // Express values greater-equal than 2^8 as 2^n
+                (1, Some(n)) if n >= 8 => {
+                    Pow(Box::new(Const(BigUint::from(2u32))), BigUint::from(n))
+                }
+                _ => Const(f),
+            },
             Var(v) => Var(v),
             Sum(es) => {
                 let mut xs: Vec<Expr<V>> = Vec::new();
@@ -287,6 +389,7 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
                 }
             }
             Mul(es) => {
+                // TODO: get Pow's out of Mul elements
                 let mut xs: Vec<Expr<V>> = Vec::new();
                 let mut neg = false;
                 for x in es.into_iter().map(|x| x.simplify(p)) {
@@ -388,6 +491,7 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
                 vars.insert(v.clone());
             }
             Neg(e) => e._vars(vars),
+            Pow(e, _) => e._vars(vars),
             Sum(es) => es.iter().for_each(|e| e._vars(vars)),
             Mul(es) => es.iter().for_each(|e| e._vars(vars)),
         }
@@ -425,7 +529,7 @@ impl<V: Var> Display for Expr<V> {
 impl<V: Var> Expr<V> {
     // sumatory terminal
     fn is_terminal(&self) -> bool {
-        matches!(self, Expr::Const(_) | Expr::Var(_))
+        matches!(self, Expr::Const(_) | Expr::Var(_) | Expr::Pow(_, _))
     }
 
     // multiplicatory terminal
@@ -446,11 +550,16 @@ impl<V: Var> Expr<V> {
             Ok(())
         };
         match self {
-            Neg(a) => {
+            Neg(e) => {
                 write!(f, "-")?;
-                let parens = !a.is_terminal();
-                fmt_exp(a, f, parens)?;
+                let parens = !e.is_terminal();
+                fmt_exp(e, f, parens)?;
                 Ok(())
+            }
+            Pow(e, c) => {
+                let parens = !e.is_terminal();
+                fmt_exp(e, f, parens)?;
+                write!(f, "^{}", c)
             }
             Const(c) => write!(f, "{}", c),
             Var(v) => write!(f, "{}", v),
@@ -622,7 +731,7 @@ mod tests {
 
 #[cfg(test)]
 mod tests_with_parser {
-    use super::*;
+    // use super::*;
     use crate::parser::parse_expr;
 
     use rand::SeedableRng;
