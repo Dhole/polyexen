@@ -21,7 +21,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 //     fn is_one(&self) -> bool;
 // }
 
-pub trait Var: Clone + Debug + Display + PartialEq {}
+pub trait Var: Clone + Debug + PartialEq {}
 
 impl Var for &'static str {}
 impl Var for String {}
@@ -45,10 +45,21 @@ pub fn get_field_p<F: Field + PrimeField<Repr = [u8; 32]>>() -> BigUint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ColumnKind {
+    Witness,
+    Public,
+    Fixed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Column {
+    pub kind: ColumnKind,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PlonkVar {
-    Witness { index: usize, rotation: i32 },
-    Instance { index: usize, rotation: i32 },
-    Fixed { index: usize, rotation: i32 },
+    ColumnQuery { column: Column, rotation: i32 },
     Challenge { index: usize, phase: usize },
 }
 
@@ -56,22 +67,23 @@ impl Var for PlonkVar {}
 
 impl Display for PlonkVar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ColumnKind::*;
         use PlonkVar::*;
         match self {
-            Witness { index, rotation } => {
-                write!(f, "a{:02}", index)?;
-                if *rotation != 0 {
-                    write!(f, "[{}]", rotation)?;
-                }
-            }
-            Fixed { index, rotation } => {
-                write!(f, "f{:02}", index)?;
-                if *rotation != 0 {
-                    write!(f, "[{}]", rotation)?;
-                }
-            }
-            Instance { index, rotation } => {
-                write!(f, "i{:02}", index)?;
+            ColumnQuery {
+                column: Column { kind, index },
+                rotation,
+            } => {
+                write!(
+                    f,
+                    "{}{:02}",
+                    match kind {
+                        Witness => "w",
+                        Public => "p",
+                        Fixed => "f",
+                    },
+                    index
+                )?;
                 if *rotation != 0 {
                     write!(f, "[{}]", rotation)?;
                 }
@@ -88,16 +100,25 @@ impl<F: PrimeField<Repr = [u8; 32]>> From<&Expression<F>> for Expr<PlonkVar> {
         match e {
             Constant(c) => Expr::Const(BigUint::from_bytes_le(&c.to_repr()[..])),
             Selector(_) => unreachable!("selector exoression is unsupported"),
-            Fixed(query) => Expr::Var(PlonkVar::Fixed {
-                index: query.column_index(),
+            Fixed(query) => Expr::Var(PlonkVar::ColumnQuery {
+                column: Column {
+                    kind: ColumnKind::Fixed,
+                    index: query.column_index(),
+                },
                 rotation: query.rotation().0,
             }),
-            Advice(query) => Expr::Var(PlonkVar::Witness {
-                index: query.column_index(),
+            Advice(query) => Expr::Var(PlonkVar::ColumnQuery {
+                column: Column {
+                    kind: ColumnKind::Witness,
+                    index: query.column_index(),
+                },
                 rotation: query.rotation().0,
             }),
-            Instance(query) => Expr::Var(PlonkVar::Instance {
-                index: query.column_index(),
+            Instance(query) => Expr::Var(PlonkVar::ColumnQuery {
+                column: Column {
+                    kind: ColumnKind::Public,
+                    index: query.column_index(),
+                },
                 rotation: query.rotation().0,
             }),
             Challenge(challenge) => Expr::Var(PlonkVar::Challenge {
@@ -520,9 +541,11 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
     }
 }
 
-impl<V: Var> Display for Expr<V> {
+impl<V: Var + Display> Display for Expr<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.fmt_ascii(f)
+        self.fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &V| {
+            write!(f, "{}", v)
+        })
     }
 }
 
@@ -537,13 +560,16 @@ impl<V: Var> Expr<V> {
         self.is_terminal() || matches!(self, Expr::Mul(_))
     }
 
-    fn fmt_ascii<W: Write>(&self, f: &mut W) -> fmt::Result {
+    pub fn fmt_ascii<W: Write, FV>(&self, f: &mut W, fmt_var: &mut FV) -> fmt::Result
+    where
+        FV: FnMut(&mut W, &V) -> fmt::Result,
+    {
         use Expr::*;
-        let fmt_exp = |e: &Self, f: &mut W, parens: bool| -> fmt::Result {
+        let mut fmt_exp = |e: &Self, f: &mut W, parens: bool| -> fmt::Result {
             if parens {
                 write!(f, "(")?;
             }
-            e.fmt_ascii(f)?;
+            e.fmt_ascii(f, fmt_var)?;
             if parens {
                 write!(f, ")")?;
             }
@@ -562,7 +588,7 @@ impl<V: Var> Expr<V> {
                 write!(f, "^{}", c)
             }
             Const(c) => write!(f, "{}", c),
-            Var(v) => write!(f, "{}", v),
+            Var(v) => fmt_var(f, v),
             Sum(es) => {
                 for (i, e) in es.iter().enumerate() {
                     let (neg, e) = if let Neg(e) = e {
@@ -624,29 +650,21 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(9);
         let e = Expr::rand(&mut rng, &p);
         println!("raw e: {:?}", e);
-        let mut s = String::new();
-        e.fmt_ascii(&mut s).unwrap();
-        println!("e: {}", s);
+        println!("e: {}", e);
 
         let e = e.clone().normalize(&p);
-        s.clear();
-        e.fmt_ascii(&mut s).unwrap();
-        println!("e.normalize: {}", s);
+        println!("e.normalize: {}", e);
 
         let e = e.simplify(&p);
         println!("raw e.normalize: {:?}", e);
-        s.clear();
-        e.fmt_ascii(&mut s).unwrap();
-        println!("e.simplify: {}", s);
+        println!("e.simplify: {}", e);
 
         let e = e.normalize(&p);
-        s.clear();
-        e.fmt_ascii(&mut s).unwrap();
-        println!("e.normalize: {}", s);
+        println!("e.normalize: {}", e);
     }
 
     #[test]
-    fn test_fmt_ascii() {
+    fn test_display() {
         #[rustfmt::skip]
         let tests = vec![
             (
@@ -667,9 +685,7 @@ mod tests {
             ),
         ];
         for (exp, exp_fmt) in tests {
-            let mut s = String::new();
-            exp.fmt_ascii(&mut s).unwrap();
-            assert_eq!(s.as_str(), exp_fmt);
+            assert_eq!(format!("{}", exp).as_str(), exp_fmt);
         }
     }
 
@@ -689,10 +705,8 @@ mod tests {
             let eval1 = e1.eval(&p, &vars);
             let eval2 = e2.eval(&p, &vars);
             if eval1 != eval2 {
-                let mut s1 = String::new();
-                e1.fmt_ascii(&mut s1).unwrap();
-                let mut s2 = String::new();
-                e2.fmt_ascii(&mut s2).unwrap();
+                let s1 = format!("{}", e1);
+                let s2 = format!("{}", e2);
                 println!("{} e1: {}", i, s1);
                 println!("{} e2: {}", i, s2);
             }

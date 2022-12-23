@@ -1,4 +1,4 @@
-use crate::expr::{get_field_p, Expr, PlonkVar as Var};
+use crate::expr::{self, get_field_p, ColumnKind, Expr, PlonkVar as Var};
 use halo2_proofs::{
     circuit::Value,
     halo2curves::group::ff::{Field, PrimeField},
@@ -8,7 +8,7 @@ use halo2_proofs::{
     },
 };
 use std::collections::HashMap;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Debug, Display, Write};
 use std::ops::Range;
 
 /// The value of a particular cell within the circuit.
@@ -201,7 +201,10 @@ pub struct Lookup {
 }
 
 #[derive(Debug)]
-pub struct CopyC {}
+pub struct CopyC {
+    pub columns: (expr::Column, expr::Column),
+    pub offsets: Vec<(usize, usize)>,
+}
 
 #[derive(Debug, Default)]
 pub struct Info {
@@ -217,6 +220,35 @@ pub struct Plaf {
     pub polys: Vec<Poly>,
     pub lookups: Vec<Lookup>,
     pub copys: Vec<CopyC>,
+}
+
+impl Plaf {
+    pub fn fmt_column<W: Write>(&self, f: &mut W, c: &expr::Column) -> fmt::Result {
+        use ColumnKind::*;
+        write!(
+            f,
+            "{}",
+            match c.kind {
+                Witness => &self.columns.witness[c.index].name,
+                Public => &self.columns.public[c.index],
+                Fixed => &self.columns.fixed[c.index],
+            }
+        )
+    }
+    pub fn fmt_var<W: Write>(&self, f: &mut W, v: &Var) -> fmt::Result {
+        match v {
+            Var::ColumnQuery { column, rotation } => {
+                self.fmt_column(f, column)?;
+                if *rotation != 0 {
+                    write!(f, "[{}]", rotation)?;
+                }
+                Ok(())
+            }
+            Var::Challenge { index, phase: _ } => {
+                write!(f, "{}", self.info.challenges[*index].name)
+            }
+        }
+    }
 }
 
 impl Display for Plaf {
@@ -251,7 +283,12 @@ impl Display for Plaf {
 
         writeln!(f, "[constraints.polys]")?;
         for p in &self.polys {
-            writeln!(f, "\"{}\" = \"{}\"", p.name, p.exp)?;
+            write!(f, "\"{}\" = \"", p.name)?;
+            p.exp
+                .fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &Var| {
+                    self.fmt_var(f, v)
+                })?;
+            writeln!(f, "\"")?;
         }
         writeln!(f)?;
 
@@ -275,11 +312,20 @@ impl Display for Plaf {
         }
         writeln!(f)?;
 
-        // writeln!(f, "[constraints.copys]")?;
-        // for p in &self.polys {
-        //     writeln!(f, "\"{}\" = \"{}\"", p.name, p.exp)?;
-        // }
-        // writeln!(f)?;
+        for c in &self.copys {
+            writeln!(f, "[[constraints.copys]]")?;
+            write!(f, "columns = [\"")?;
+            self.fmt_column(f, &c.columns.0)?;
+            write!(f, "\", \"")?;
+            self.fmt_column(f, &c.columns.1)?;
+            writeln!(f, "\"]")?;
+            writeln!(f, "offsets = [")?;
+            for (a, b) in &c.offsets {
+                writeln!(f, " [{}, {}],", a, b)?;
+            }
+            writeln!(f, "]")?;
+        }
+        writeln!(f)?;
 
         Ok(())
     }
@@ -385,6 +431,26 @@ pub fn get_ir<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F
             name: name.to_string(),
             exps: (lhs, rhs),
         })
+    }
+    let column_any_to_kind = |ct: &Any| match ct {
+        Any::Advice(_) => ColumnKind::Witness,
+        Any::Fixed => ColumnKind::Fixed,
+        Any::Instance => ColumnKind::Public,
+    };
+    for ((col_a, col_b), offsets) in assembly.copies {
+        plaf.copys.push(CopyC {
+            columns: (
+                expr::Column {
+                    kind: column_any_to_kind(col_a.column_type()),
+                    index: col_a.index(),
+                },
+                expr::Column {
+                    kind: column_any_to_kind(col_b.column_type()),
+                    index: col_b.index(),
+                },
+            ),
+            offsets,
+        });
     }
     println!("{}", plaf);
     Ok(())
