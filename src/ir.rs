@@ -7,6 +7,7 @@ use halo2_proofs::{
         ConstraintSystem, Error, Fixed, FloorPlanner, Instance, Selector,
     },
 };
+use num_bigint::BigUint;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Write};
 use std::ops::Range;
@@ -19,7 +20,171 @@ enum CellValue<F> {
     // A cell that has been assigned a value.
     Assigned(F),
     // A unique poisoned cell.
-    Poison(usize),
+    // Poison(usize),
+}
+
+#[derive(Debug)]
+pub struct Witness {
+    num_rows: usize,
+    columns: Vec<ColumnWitness>,
+    // The advice cells in the circuit, arranged as [column][row].
+    witness: Vec<Vec<Option<BigUint>>>,
+}
+
+impl Display for Witness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "--- witness ---\n")?;
+        for (i, col) in self.columns.iter().enumerate() {
+            if i != 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{}", col.name)?;
+        }
+        writeln!(f)?;
+        for row_idx in 0..self.num_rows {
+            for col_idx in 0..self.columns.len() {
+                if col_idx != 0 {
+                    write!(f, ",")?;
+                }
+                if let Some(ref v) = self.witness[col_idx][row_idx] {
+                    write!(f, "{}", v)?;
+                }
+            }
+            writeln!(f)?;
+        }
+        writeln!(f)?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct WitnessAssembly<F: Field> {
+    k: u32,
+    // The instance cells in the circuit, arranged as [column][row].
+    instance: Vec<Vec<F>>,
+    // The advice cells in the circuit, arranged as [column][row].
+    advice: Vec<Vec<CellValue<F>>>,
+    // A range of available rows for assignment and copies.
+    usable_rows: Range<usize>,
+    challenges: Vec<F>,
+}
+
+impl<F: Field> Assignment<F> for WitnessAssembly<F> {
+    fn enter_region<NR, N>(&mut self, _name: N)
+    where
+        NR: Into<String>,
+        N: FnOnce() -> NR,
+    {
+        // Do nothing; we don't care about regions in this context.
+    }
+
+    fn exit_region(&mut self) {
+        // Do nothing; we don't care about regions in this context.
+    }
+
+    fn enable_selector<A, AR>(
+        &mut self,
+        _: A,
+        _selector: &Selector,
+        _row: usize,
+    ) -> Result<(), Error>
+    where
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        Ok(())
+    }
+
+    fn query_instance(&self, column: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
+        if !self.usable_rows.contains(&row) {
+            return Err(Error::not_enough_rows_available(self.k));
+        }
+
+        self.instance
+            .get(column.index())
+            .and_then(|column| column.get(row))
+            .map(|v| Value::known(*v))
+            .ok_or(Error::BoundsFailure)
+    }
+
+    fn assign_advice<V, VR, A, AR>(
+        &mut self,
+        _: A,
+        column: Column<Advice>,
+        row: usize,
+        to: V,
+    ) -> Result<(), Error>
+    where
+        V: FnOnce() -> Value<VR>,
+        VR: Into<Assigned<F>>,
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        if !self.usable_rows.contains(&row) {
+            return Err(Error::not_enough_rows_available(self.k));
+        }
+
+        *self
+            .advice
+            .get_mut(column.index())
+            .and_then(|v| v.get_mut(row))
+            .ok_or(Error::BoundsFailure)? =
+            CellValue::Assigned(to().into_field().evaluate().assign()?);
+
+        Ok(())
+    }
+
+    fn assign_fixed<V, VR, A, AR>(
+        &mut self,
+        _: A,
+        _column: Column<Fixed>,
+        _row: usize,
+        _to: V,
+    ) -> Result<(), Error>
+    where
+        V: FnOnce() -> Value<VR>,
+        VR: Into<Assigned<F>>,
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        Ok(())
+    }
+
+    fn copy(
+        &mut self,
+        _left_column: Column<Any>,
+        _left_row: usize,
+        _right_column: Column<Any>,
+        _right_row: usize,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn fill_from_row(
+        &mut self,
+        _col: Column<Fixed>,
+        _from_row: usize,
+        _to: Value<Assigned<F>>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn get_challenge(&self, challenge: Halo2Challenge) -> Value<F> {
+        Value::known(self.challenges[challenge.index()])
+    }
+
+    fn push_namespace<NR, N>(&mut self, _: N)
+    where
+        NR: Into<String>,
+        N: FnOnce() -> NR,
+    {
+        // TODO: Do something with namespaces :)
+    }
+
+    fn pop_namespace(&mut self, _: Option<String>) {
+        // TODO: Do something with namespaces :)
+    }
 }
 
 /// Assembly to be used in circuit synthesis.
@@ -127,7 +292,7 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         }
 
         // TODO: Sort columns
-        let mut columns = self
+        let columns = self
             .copies
             .entry((left_column.clone(), right_column.clone()))
             .or_insert_with(|| Vec::new());
@@ -169,7 +334,7 @@ impl<F: Field> Assignment<F> for Assembly<F> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ColumnWitness {
     pub name: String,
     pub phase: usize,
@@ -220,6 +385,7 @@ pub struct Plaf {
     pub polys: Vec<Poly>,
     pub lookups: Vec<Lookup>,
     pub copys: Vec<CopyC>,
+    pub fixed: Vec<Vec<Option<BigUint>>>,
 }
 
 impl Plaf {
@@ -327,14 +493,95 @@ impl Display for Plaf {
         }
         writeln!(f)?;
 
+        writeln!(f, "--- fixed ---\n")?;
+        for (i, col) in self.columns.fixed.iter().enumerate() {
+            if i != 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{}", col)?;
+        }
+        writeln!(f)?;
+        for row_idx in 0..self.info.num_rows {
+            for col_idx in 0..self.columns.fixed.len() {
+                if col_idx != 0 {
+                    write!(f, ",")?;
+                }
+                if let Some(ref v) = self.fixed[col_idx][row_idx] {
+                    write!(f, "{}", v)?;
+                }
+            }
+            writeln!(f)?;
+        }
+        writeln!(f)?;
+
         Ok(())
     }
+}
+
+pub fn get_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F>>(
+    k: u32,
+    circuit: &ConcreteCircuit,
+    plaf: &Plaf,
+    challenges: Vec<F>,
+    instance: Vec<Vec<F>>,
+) -> Result<Witness, Error> {
+    let n = 1 << k;
+
+    let mut cs = ConstraintSystem::default();
+    let config = ConcreteCircuit::configure(&mut cs);
+
+    let instance = instance
+        .into_iter()
+        .map(|mut instance| {
+            if instance.len() > n - (cs.blinding_factors() + 1) {
+                return Err(Error::InstanceTooLarge);
+            }
+
+            instance.resize(n, F::zero());
+            Ok(instance)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let advice = vec![vec![CellValue::Unassigned; n]; cs.num_advice_columns()];
+
+    let mut assembly: WitnessAssembly<F> = WitnessAssembly {
+        k,
+        instance,
+        advice,
+        usable_rows: 0..n as usize - (cs.blinding_factors() + 1),
+        challenges,
+    };
+
+    ConcreteCircuit::FloorPlanner::synthesize(
+        &mut assembly,
+        circuit,
+        config,
+        cs.constants().clone(),
+    )?;
+
+    let mut witness = Witness {
+        num_rows: n,
+        columns: plaf.columns.witness.clone(),
+        witness: vec![vec![]; plaf.columns.witness.len()],
+    };
+
+    for i in 0..plaf.columns.witness.len() {
+        let mut column = vec![None; n];
+        for (j, cell) in assembly.advice[i].iter().enumerate() {
+            if let CellValue::Assigned(v) = cell {
+                column[j] = Some(BigUint::from_bytes_le(&v.to_repr()[..]));
+            }
+        }
+        witness.witness[i] = column;
+    }
+
+    Ok(witness)
 }
 
 pub fn get_ir<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F>>(
     k: u32,
     circuit: &ConcreteCircuit,
-) -> Result<(), Error> {
+) -> Result<Plaf, Error> {
     let n = 1 << k;
 
     let mut cs = ConstraintSystem::default();
@@ -452,6 +699,14 @@ pub fn get_ir<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F
             offsets,
         });
     }
-    println!("{}", plaf);
-    Ok(())
+    for i in 0..cs.num_fixed_columns() {
+        let mut fixed = vec![None; n];
+        for (j, cell) in assembly.fixed[i].iter().enumerate() {
+            if let CellValue::Assigned(v) = cell {
+                fixed[j] = Some(BigUint::from_bytes_le(&v.to_repr()[..]));
+            }
+        }
+        plaf.fixed.push(fixed);
+    }
+    Ok(plaf)
 }
