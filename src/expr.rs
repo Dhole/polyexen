@@ -313,7 +313,7 @@ fn mul(lhs: BigUint, rhs: &BigUint, p: &BigUint) -> BigUint {
     (lhs * rhs).mod_floor(p)
 }
 
-impl<V: Var + Eq + Hash + Ord> Expr<V> {
+impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
     pub fn eval(&self, p: &BigUint, vars: &HashMap<V, BigUint>) -> BigUint {
         use Expr::*;
         match self {
@@ -353,11 +353,11 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
         // let p_1 = p.clone() - BigUint::one();
         match self {
             Pow(e, f) => {
-                let e = e.simplify(p);
+                let e = e._simplify(p, ip);
                 Pow(Box::new(e), f)
             }
             Neg(e) => {
-                let e = e.simplify(p);
+                let e = e._simplify(p, ip);
                 match e {
                     Neg(ne) => *ne, // double negate concels itself
                     e => Neg(Box::new(e)),
@@ -373,7 +373,7 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
             Var(v) => Var(v),
             Sum(es) => {
                 let mut xs: Vec<Expr<V>> = Vec::new();
-                for x in es.into_iter().map(|x| x.simplify(p)) {
+                for x in es.into_iter().map(|x| x._simplify(p, ip)) {
                     match x {
                         Sum(es) => xs.extend(es.into_iter()),
                         e => xs.push(e),
@@ -413,7 +413,7 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
                 // TODO: get Pow's out of Mul elements
                 let mut xs: Vec<Expr<V>> = Vec::new();
                 let mut neg = false;
-                for x in es.into_iter().map(|x| x.simplify(p)) {
+                for x in es.into_iter().map(|x| x._simplify(p, ip)) {
                     match x {
                         Neg(e) => {
                             neg ^= true;
@@ -457,9 +457,152 @@ impl<V: Var + Eq + Hash + Ord> Expr<V> {
         }
     }
 
+    fn is_linear_comb(e: &Self, base: &mut Option<Self>, elems: &mut Vec<Self>) -> bool {
+        use Expr::*;
+        // match pattern "sum_lhs + sum_rhs"
+        // where "sum_rhs = mul_lhs * mul_rhs"
+        // in summary "sum_lhs + mul_lhs * mul_rhs"
+        match e {
+            Sum(xs) => {
+                if xs.len() != 2 {
+                    return false;
+                }
+                let sum_lhs = &xs[0];
+                let sum_rhs = &xs[1];
+                match sum_rhs {
+                    Mul(ys) => {
+                        if ys.len() < 2 {
+                            return false;
+                        }
+                        let mul_lhs = &ys[0];
+                        if base.is_none() {
+                            *base = Some(mul_lhs.clone());
+                        }
+                        // When elem is 0, this "r * (0 + r * (10 ..))" becomes this
+                        // "r * r * (10 ..)"
+                        for v in &ys[1..ys.len() - 1] {
+                            if Some(v) == base.as_ref() {
+                                elems.push(Const(BigUint::zero()));
+                                continue;
+                            }
+                            return false;
+                        }
+                        let mul_rhs = &ys[ys.len() - 1];
+                        // sort (mul_lhs, mul_rhs) so that base into mul_lhs (if it exists)
+                        let (mul_lhs, mul_rhs) = if Some(mul_lhs) == base.as_ref() {
+                            (mul_lhs, mul_rhs)
+                        } else if Some(mul_rhs) == base.as_ref() {
+                            (mul_rhs, mul_lhs)
+                        } else {
+                            (mul_lhs, mul_rhs)
+                        };
+                        if Some(mul_lhs) == base.as_ref() {
+                            elems.push(sum_lhs.clone());
+                            if mul_rhs.is_terminal() {
+                                elems.push(mul_rhs.clone());
+                                return true;
+                            }
+                            return Self::is_linear_comb(&mul_rhs, base, elems);
+                        }
+                        return false;
+                    }
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+
+    fn get_linear_comb(&self) -> Option<(Self, Vec<Self>)> {
+        let mut base = None;
+        let mut elems = Vec::new();
+        let result = Self::is_linear_comb(self, &mut base, &mut elems);
+        if result {
+            Some((base.expect("base found"), elems))
+        } else {
+            None
+        }
+    }
+
+    // Find linear combinations expressed in recursive form "a + r * (b + r * (c + r * (...)))"
+    // and replace them by "a + b*r + c*r^2 + ..."
+    fn normalize_linear_comb(self) -> Self {
+        use Expr::*;
+        match self {
+            Neg(e) => Neg(Box::new(e.normalize_linear_comb())),
+            Sum(xs) => {
+                let e = Sum(xs);
+                if let Some((base, elems)) = e.get_linear_comb() {
+                    if elems.len() >= 3 {
+                        let mut xs = Vec::with_capacity(elems.len());
+                        for (i, elem) in elems.into_iter().enumerate() {
+                            // let e = if i == 0 {
+                            //     elem
+                            // } else {
+                            //     Mul(vec![elem, Pow(Box::new(base.clone()), BigUint::from(i))])
+                            // };
+                            let e = Mul(vec![elem, Pow(Box::new(base.clone()), BigUint::from(i))]);
+                            xs.push(e);
+                        }
+                        return Sum(xs);
+                    }
+                }
+                if let Sum(xs) = e {
+                    Sum(xs.into_iter().map(|e| e.normalize_linear_comb()).collect())
+                } else {
+                    unreachable!();
+                }
+            }
+            Mul(xs) => Mul(xs.into_iter().map(|e| e.normalize_linear_comb()).collect()),
+            _ => self,
+        }
+    }
+
+    // Find multiplications with repeated elements and turn them into pows
+    fn normalize_pow(self) -> Self {
+        use Expr::*;
+        match self {
+            Neg(e) => Neg(Box::new(e.normalize_pow())),
+            Sum(xs) => Sum(xs.into_iter().map(|e| e.normalize_pow()).collect()),
+            Mul(xs) => {
+                let mut elems = Vec::new();
+                let mut pow: Option<(Self, usize)> = None;
+                for x in xs {
+                    let x = x.normalize_pow();
+                    if let Some((base, exp)) = pow {
+                        if x == base {
+                            pow = Some((base, exp + 1));
+                        } else {
+                            if exp == 1 {
+                                elems.push(base);
+                            } else {
+                                elems.push(Pow(Box::new(base), BigUint::from(exp)));
+                            }
+                            pow = Some((x, 1));
+                        }
+                    } else {
+                        pow = Some((x, 1));
+                    }
+                }
+                if let Some((base, exp)) = pow {
+                    if exp == 1 {
+                        elems.push(base);
+                    } else {
+                        elems.push(Pow(Box::new(base), BigUint::from(exp)));
+                    }
+                }
+                Mul(elems)
+            }
+            _ => self,
+        }
+    }
+
     pub fn simplify(self, p: &BigUint) -> Self {
         let ip = BigInt::from(p.clone());
-        self._simplify(p, &ip)
+        let e = self._simplify(p, &ip);
+        let e = e.normalize_linear_comb();
+        let e = e.normalize_pow();
+        e
     }
 
     fn _normalize(self, p: &BigUint) -> Self {
@@ -745,7 +888,7 @@ mod tests {
 
 #[cfg(test)]
 mod tests_with_parser {
-    // use super::*;
+    use super::*;
     use crate::parser::parse_expr;
 
     use rand::SeedableRng;
@@ -759,5 +902,32 @@ mod tests_with_parser {
             let e2 = parse_expr(e2_str).unwrap();
             assert!(e1.test_eq(&mut rng, &e2))
         }
+    }
+
+    #[test]
+    fn test_simplify_linear_comb() {
+        let p = BigUint::from(0x10000u64 - 15);
+        let e1_str = "112 + r_word*(164 + r_word*(133 + r_word*(93 + r_word*(4 + r_word*(216 + r_word*(250 + r_word*(123 + r_word*(59 + r_word*(39 + r_word*(130 + r_word*(202 + r_word*(83 + r_word*(182 + r_word*r_word*(229 + r_word*(192 + r_word*(3 + r_word*(199 + r_word*(220 + r_word*(178 + r_word*(125 + r_word*(126 + r_word*(146 + r_word*(60 + r_word*(35 + r_word*(247 + r_word*(134 + r_word*(1 + r_word*(70 + r_word*(210 + 197*r_word)))))))))))))))))))))))))))))";
+        let e2_str = "112*r_word^0 + 164*r_word^1 + 133*r_word^2 + 93*r_word^3 + 4*r_word^4 + 216*r_word^5 + 250*r_word^6 + 123*r_word^7 + 59*r_word^8 + 39*r_word^9 + 130*r_word^10 + 202*r_word^11 + 83*r_word^12 + 0*r_word^13 + 182*r_word^14 + 229*r_word^15 + 192*r_word^16 + 3*r_word^17 + 199*r_word^18 + 220*r_word^19 + 178*r_word^20 + 125*r_word^21 + 126*r_word^22 + 146*r_word^23 + 60*r_word^24 + 35*r_word^25 + 247*r_word^26 + 134*r_word^27 + 1*r_word^28 + 70*r_word^29 + 210*r_word^30 + 197*r_word^31";
+        let e1 = parse_expr(e1_str).unwrap();
+        let e2 = e1.simplify(&p);
+        // println!("{:?}", e1.normalize_linear_comb());
+        let s2 = format!("{}", e2);
+        assert_eq!(s2, e2_str);
+    }
+
+    #[test]
+    fn test_simplify_pow() {
+        let p = BigUint::from(0x10000u64 - 15);
+        let e1_str =
+            "4*(r_word + r_word*r_word + r_word*r_word*r_word + r_word*r_word*r_word*r_word)";
+        let e2_str = "4*(r_word + r_word^2 + r_word^3 + r_word^4)";
+        // TODO: Debug parser with this
+        // let e1_str ="f05*w77*w78*w79*w80*(1 - w76)*(w26 - (w26[-1]*2^0 + w25[-1]*2^1 + w24[-1]*2^2 + w23[-1]*2^3) + 2*(w25*2^0 + w24*2^1 + w23*2^2) + r_word*(w28 - w28[-1]) + r_word*r_word*(w27 - w27[-1]) + r_word*r_word*r_word*(w38 - w38[-1]) + r_word*r_word*r_word*r_word*(w37 - w37[-1]) + r_word*r_word*r_word*r_word*r_word*(w36 - w36[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*(w35 - w35[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w34 - w34[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w33 - w33[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w32 - w32[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w31 - w31[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w30 - w30[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w29 - w29[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w05 - w05[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w69 - (w69[-1] + 2^8*w70[-1]) + 2^8*w70))";
+        let e1 = parse_expr(e1_str).unwrap();
+        let e2 = e1.simplify(&p);
+        // println!("{:?}", e1.normalize_linear_comb());
+        let s2 = format!("{}", e2);
+        assert_eq!(s2, e2_str);
     }
 }

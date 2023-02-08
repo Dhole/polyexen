@@ -31,28 +31,29 @@ pub struct Witness {
     witness: Vec<Vec<Option<BigUint>>>,
 }
 
-impl Display for Witness {
+/// Adaptor struct to format the witness columns assignments as CSV
+pub struct WitnessDisplayCSV<'a>(pub &'a Witness);
+
+impl Display for WitnessDisplayCSV<'_> {
+    /// Format witness assignment as CSV
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "--- witness ---\n")?;
-        for (i, col) in self.columns.iter().enumerate() {
-            if i != 0 {
-                write!(f, ",")?;
-            }
-            write!(f, "{}", col.name)?;
+        let this = self.0;
+        write!(f, "offset")?;
+        for col in this.columns.iter() {
+            write!(f, ",")?;
+            write!(f, "{}", col.name())?;
         }
         writeln!(f)?;
-        for row_idx in 0..self.num_rows {
-            for col_idx in 0..self.columns.len() {
-                if col_idx != 0 {
-                    write!(f, ",")?;
-                }
-                if let Some(ref v) = self.witness[col_idx][row_idx] {
+        for row_idx in 0..this.num_rows {
+            write!(f, "{}", row_idx)?;
+            for col_idx in 0..this.columns.len() {
+                write!(f, ",")?;
+                if let Some(ref v) = this.witness[col_idx][row_idx] {
                     write!(f, "{}", v)?;
                 }
             }
             writeln!(f)?;
         }
-        writeln!(f)?;
 
         Ok(())
     }
@@ -68,6 +69,8 @@ struct WitnessAssembly<F: Field> {
     // A range of available rows for assignment and copies.
     usable_rows: Range<usize>,
     challenges: Vec<F>,
+    // region: Option<(String, HashMap<Column<Any>, String>)>,
+    // regions: HashMap<String, HashMap<Column<Any>, String>>,
 }
 
 impl<F: Field> Assignment<F> for WitnessAssembly<F> {
@@ -76,11 +79,12 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
         NR: Into<String>,
         N: FnOnce() -> NR,
     {
-        // Do nothing; we don't care about regions in this context.
+        // self.region = Some((name().into(), HashMap::new()));
     }
 
     fn exit_region(&mut self) {
-        // Do nothing; we don't care about regions in this context.
+        // let (name, annotations) = self.region.take().unwrap();
+        // self.regions.insert(name, annotations);
     }
 
     fn enable_selector<A, AR>(
@@ -98,7 +102,11 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
 
     fn query_instance(&self, column: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
         if !self.usable_rows.contains(&row) {
-            return Err(Error::not_enough_rows_available(self.k));
+            panic!(
+                "query_instance: row={} not in usable_rows={:?}",
+                row, self.usable_rows
+            );
+            // return Err(Error::not_enough_rows_available(self.k));
         }
 
         self.instance
@@ -122,7 +130,11 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
         AR: Into<String>,
     {
         if !self.usable_rows.contains(&row) {
-            return Err(Error::not_enough_rows_available(self.k));
+            panic!(
+                "assign_advice: row={} not in usable_rows={:?}",
+                row, self.usable_rows
+            );
+            // return Err(Error::not_enough_rows_available(self.k));
         }
 
         *self
@@ -185,6 +197,13 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
     fn pop_namespace(&mut self, _: Option<String>) {
         // TODO: Do something with namespaces :)
     }
+
+    fn annotate_column<A, AR>(&mut self, annotation: A, column: Column<Any>)
+    where
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+    }
 }
 
 /// Assembly to be used in circuit synthesis.
@@ -198,19 +217,22 @@ struct Assembly<F: Field> {
     // A range of available rows for assignment and copies.
     usable_rows: Range<usize>,
     _marker: std::marker::PhantomData<F>,
+    region: Option<(String, HashMap<Column<Any>, String>)>,
+    regions: HashMap<String, HashMap<Column<Any>, String>>,
 }
 
 impl<F: Field> Assignment<F> for Assembly<F> {
-    fn enter_region<NR, N>(&mut self, _: N)
+    fn enter_region<NR, N>(&mut self, name: N)
     where
         NR: Into<String>,
         N: FnOnce() -> NR,
     {
-        // Do nothing; we don't care about regions in this context.
+        self.region = Some((name().into(), HashMap::new()));
     }
 
     fn exit_region(&mut self) {
-        // Do nothing; we don't care about regions in this context.
+        let (name, annotations) = self.region.take().expect("exit from a region");
+        self.regions.insert(name, annotations);
     }
 
     fn enable_selector<A, AR>(&mut self, _: A, selector: &Selector, row: usize) -> Result<(), Error>
@@ -219,7 +241,11 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         AR: Into<String>,
     {
         if !self.usable_rows.contains(&row) {
-            return Err(Error::not_enough_rows_available(self.k));
+            panic!(
+                "enable_selector: row={} not in usable_rows={:?}",
+                row, self.usable_rows
+            );
+            // return Err(Error::not_enough_rows_available(self.k));
         }
 
         self.selectors[selector.index()][row] = true;
@@ -229,7 +255,11 @@ impl<F: Field> Assignment<F> for Assembly<F> {
 
     fn query_instance(&self, _: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
         if !self.usable_rows.contains(&row) {
-            return Err(Error::not_enough_rows_available(self.k));
+            panic!(
+                "query_instance: row={} not in usable_rows={:?}",
+                row, self.usable_rows
+            );
+            // return Err(Error::not_enough_rows_available(self.k));
         }
 
         // There is no instance in this context.
@@ -267,7 +297,11 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         AR: Into<String>,
     {
         if !self.usable_rows.contains(&row) {
-            return Err(Error::not_enough_rows_available(self.k));
+            panic!(
+                "assign_fixed: row={} not in usable_rows={:?}",
+                row, self.usable_rows
+            );
+            // return Err(Error::not_enough_rows_available(self.k));
         }
 
         *self
@@ -288,7 +322,12 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         right_row: usize,
     ) -> Result<(), Error> {
         if !self.usable_rows.contains(&left_row) || !self.usable_rows.contains(&right_row) {
-            return Err(Error::not_enough_rows_available(self.k));
+            panic!(
+                "copy: rows={:?} not in usable_rows={:?}",
+                (left_row, right_row),
+                self.usable_rows
+            );
+            // return Err(Error::not_enough_rows_available(self.k));
         }
 
         // TODO: Sort columns
@@ -307,7 +346,11 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         to: Value<Assigned<F>>,
     ) -> Result<(), Error> {
         if !self.usable_rows.contains(&from_row) {
-            return Err(Error::not_enough_rows_available(self.k));
+            panic!(
+                "fill_from_row: from_row={} not in usable_rows={:?}",
+                from_row, self.usable_rows
+            );
+            // return Err(Error::not_enough_rows_available(self.k));
         }
 
         for row in self.usable_rows.clone().skip(from_row) {
@@ -332,25 +375,98 @@ impl<F: Field> Assignment<F> for Assembly<F> {
     fn pop_namespace(&mut self, _: Option<String>) {
         // Do nothing; we don't care about namespaces in this context.
     }
+
+    fn annotate_column<A, AR>(&mut self, annotation: A, column: Column<Any>)
+    where
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        let (_, ref mut annotations) = self.region.as_mut().expect("annotate in a region");
+        annotations.insert(column, annotation().into());
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ColumnWitness {
     pub name: String,
+    pub aliases: Vec<String>,
     pub phase: usize,
+}
+
+impl ColumnWitness {
+    fn new(name: String, phase: usize) -> Self {
+        Self {
+            name,
+            aliases: Vec::new(),
+            phase,
+        }
+    }
+    fn name(&self) -> &String {
+        self.aliases.get(0).unwrap_or(&self.name)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ColumnFixed {
+    pub name: String,
+    pub aliases: Vec<String>,
+}
+
+impl ColumnFixed {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            aliases: Vec::new(),
+        }
+    }
+    fn name(&self) -> &String {
+        self.aliases.get(0).unwrap_or(&self.name)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ColumnPublic {
+    pub name: String,
+    pub aliases: Vec<String>,
+}
+
+impl ColumnPublic {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            aliases: Vec::new(),
+        }
+    }
+    fn name(&self) -> &String {
+        self.aliases.get(0).unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug)]
 pub struct Challenge {
     pub name: String,
+    pub alias: Option<String>,
     pub phase: usize,
+}
+
+impl Challenge {
+    fn new(name: String, phase: usize) -> Self {
+        Self {
+            name,
+            alias: None,
+            phase,
+        }
+    }
+    fn name(&self) -> &String {
+        self.alias.as_ref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct Columns {
     pub witness: Vec<ColumnWitness>,
-    pub fixed: Vec<String>,
-    pub public: Vec<String>,
+    pub fixed: Vec<ColumnFixed>,
+    pub public: Vec<ColumnPublic>,
 }
 
 #[derive(Debug)]
@@ -395,9 +511,9 @@ impl Plaf {
             f,
             "{}",
             match c.kind {
-                Witness => &self.columns.witness[c.index].name,
-                Public => &self.columns.public[c.index],
-                Fixed => &self.columns.fixed[c.index],
+                Witness => self.columns.witness[c.index].name(),
+                Public => self.columns.public[c.index].name(),
+                Fixed => self.columns.fixed[c.index].name(),
             }
         )
     }
@@ -411,106 +527,128 @@ impl Plaf {
                 Ok(())
             }
             Var::Challenge { index, phase: _ } => {
-                write!(f, "{}", self.info.challenges[*index].name)
+                write!(f, "{}", self.info.challenges[*index].name())
             }
         }
     }
+    pub fn set_challange_alias(&mut self, index: usize, name: String) {
+        self.info.challenges[index].alias = Some(name)
+    }
 }
 
-impl Display for Plaf {
+/// Adaptor struct to format the fixed columns assignments as CSV
+pub struct PlafDisplayFixedCSV<'a>(pub &'a Plaf);
+
+impl Display for PlafDisplayFixedCSV<'_> {
+    /// Format fixed columns assignments as CSV
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let this = self.0;
+        write!(f, "offset")?;
+        for col in this.columns.fixed.iter() {
+            write!(f, ",")?;
+            write!(f, "{}", col.name())?;
+        }
+        writeln!(f)?;
+        for row_idx in 0..this.info.num_rows {
+            write!(f, "{}", row_idx)?;
+            for col_idx in 0..this.columns.fixed.len() {
+                write!(f, ",")?;
+                if let Some(ref v) = this.fixed[col_idx][row_idx] {
+                    write!(f, "{}", v)?;
+                }
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
+/// Adaptor struct to format the entire Plaf as toml except for the Fixed Column assignments
+pub struct PlafDisplayBaseTOML<'a>(pub &'a Plaf);
+
+impl Display for PlafDisplayBaseTOML<'_> {
+    /// Format entire Plaf as toml except for Fixed Columns assignments
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let this = self.0;
         writeln!(f, "[info]")?;
-        writeln!(f, "num_rows = {}", self.info.num_rows)?;
+        writeln!(f, "num_rows = {}", this.info.num_rows)?;
         writeln!(f)?;
 
         writeln!(f, "[info.challenges]")?;
-        for ch in &self.info.challenges {
-            writeln!(f, "{} = {{ phase = {} }}", ch.name, ch.phase)?;
+        for ch in &this.info.challenges {
+            write!(f, "{} = {{ phase = {}", ch.name, ch.phase)?;
+            if let Some(alias) = &ch.alias {
+                writeln!(f, ", alias = \"{}\" }}", alias)?;
+            } else {
+                writeln!(f, "}}")?;
+            }
         }
         writeln!(f)?;
 
         writeln!(f, "[columns.public]")?;
-        for c in &self.columns.public {
-            writeln!(f, "{} = {{}}", c)?;
+        for c in &this.columns.public {
+            writeln!(f, "{} = {{ aliases = {:?} }}", c.name, c.aliases)?;
         }
         writeln!(f)?;
 
         writeln!(f, "[columns.fixed]")?;
-        for c in &self.columns.fixed {
-            writeln!(f, "{} = {{}}", c)?;
+        for c in &this.columns.fixed {
+            writeln!(f, "{} = {{ aliases = {:?} }}", c.name, c.aliases)?;
         }
         writeln!(f)?;
 
         writeln!(f, "[columns.witness]")?;
-        for c in &self.columns.witness {
-            writeln!(f, "{} = {{ phase = {} }}", c.name, c.phase)?;
+        for c in &this.columns.witness {
+            writeln!(
+                f,
+                "{} = {{ phase = {}, aliases = {:?} }}",
+                c.name, c.phase, c.aliases
+            )?;
         }
         writeln!(f)?;
 
-        writeln!(f, "[constraints.polys]")?;
-        for p in &self.polys {
-            write!(f, "\"{}\" = \"", p.name)?;
+        for p in &this.polys {
+            writeln!(f, "[constraints.polys.\"{}\"]", p.name)?;
+            write!(f, "c = \"")?;
             p.exp
                 .fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &Var| {
-                    self.fmt_var(f, v)
+                    this.fmt_var(f, v)
                 })?;
             writeln!(f, "\"")?;
         }
         writeln!(f)?;
 
-        writeln!(f, "[constraints.lookups]")?;
-        for l in &self.lookups {
-            write!(f, "\"{}\" = [[", l.name)?;
-            for (i, lhs) in l.exps.0.iter().enumerate() {
-                write!(f, "\"{}\"", lhs)?;
-                if i != l.exps.0.len() - 1 {
-                    write!(f, ", ")?;
-                }
-            }
-            write!(f, "], [")?;
-            for (i, rhs) in l.exps.1.iter().enumerate() {
-                write!(f, "\"{}\"", rhs)?;
-                if i != l.exps.1.len() - 1 {
-                    write!(f, ", ")?;
-                }
+        for l in &this.lookups {
+            writeln!(f, "[constraints.lookups.\"{}\"]", l.name)?;
+            writeln!(f, "l = [")?;
+            for (lhs, rhs) in l.exps.0.iter().zip(l.exps.1.iter()) {
+                write!(f, "  [\"")?;
+                lhs.fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &Var| {
+                    this.fmt_var(f, v)
+                })?;
+                writeln!(f, "\",")?;
+                write!(f, "   \"")?;
+                rhs.fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &Var| {
+                    this.fmt_var(f, v)
+                })?;
+                writeln!(f, "\"],")?;
             }
             writeln!(f, "]")?;
         }
         writeln!(f)?;
 
-        for c in &self.copys {
+        for c in &this.copys {
             writeln!(f, "[[constraints.copys]]")?;
             write!(f, "columns = [\"")?;
-            self.fmt_column(f, &c.columns.0)?;
+            this.fmt_column(f, &c.columns.0)?;
             write!(f, "\", \"")?;
-            self.fmt_column(f, &c.columns.1)?;
+            this.fmt_column(f, &c.columns.1)?;
             writeln!(f, "\"]")?;
             writeln!(f, "offsets = [")?;
             for (a, b) in &c.offsets {
                 writeln!(f, " [{}, {}],", a, b)?;
             }
             writeln!(f, "]")?;
-        }
-        writeln!(f)?;
-
-        writeln!(f, "--- fixed ---\n")?;
-        for (i, col) in self.columns.fixed.iter().enumerate() {
-            if i != 0 {
-                write!(f, ",")?;
-            }
-            write!(f, "{}", col)?;
-        }
-        writeln!(f)?;
-        for row_idx in 0..self.info.num_rows {
-            for col_idx in 0..self.columns.fixed.len() {
-                if col_idx != 0 {
-                    write!(f, ",")?;
-                }
-                if let Some(ref v) = self.fixed[col_idx][row_idx] {
-                    write!(f, "{}", v)?;
-                }
-            }
-            writeln!(f)?;
         }
         writeln!(f)?;
 
@@ -550,6 +688,8 @@ pub fn get_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
         advice,
         usable_rows: 0..n as usize - (cs.blinding_factors() + 1),
         challenges,
+        // region: None,
+        // regions: HashMap::new(),
     };
 
     ConcreteCircuit::FloorPlanner::synthesize(
@@ -578,7 +718,7 @@ pub fn get_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
     Ok(witness)
 }
 
-pub fn get_ir<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F>>(
+pub fn gen_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F>>(
     k: u32,
     circuit: &ConcreteCircuit,
 ) -> Result<Plaf, Error> {
@@ -588,7 +728,6 @@ pub fn get_ir<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F
     let config = ConcreteCircuit::configure(&mut cs);
 
     let degree = cs.degree();
-    println!("Degree = {}", degree);
 
     if n < cs.minimum_rows() {
         panic!("not enough rows available, k = {}", k);
@@ -601,6 +740,8 @@ pub fn get_ir<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F
         selectors: vec![vec![false; n as usize]; cs.num_selectors()],
         usable_rows: 0..n as usize - (cs.blinding_factors() + 1),
         _marker: std::marker::PhantomData,
+        region: None,
+        regions: HashMap::new(),
     };
 
     ConcreteCircuit::FloorPlanner::synthesize(
@@ -627,25 +768,40 @@ pub fn get_ir<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F
     let challenge_phase = cs.challenge_phase();
     for i in 0..cs.num_challenges() {
         let phase = challenge_phase[i];
-        plaf.info.challenges.push(Challenge {
-            name: format!("ch{}_{}", i, phase),
-            phase: phase as usize,
-        });
+        plaf.info
+            .challenges
+            .push(Challenge::new(format!("ch{}_{}", i, phase), phase as usize));
     }
 
     for i in 0..cs.num_fixed_columns() {
-        plaf.columns.fixed.push(format!("f{:02}", i));
+        plaf.columns
+            .fixed
+            .push(ColumnFixed::new(format!("f{:02}", i)));
     }
     for i in 0..cs.num_instance_columns() {
-        plaf.columns.public.push(format!("i{:02}", i));
+        plaf.columns
+            .public
+            .push(ColumnPublic::new(format!("i{:02}", i)));
     }
     let column_phase = cs.advice_column_phase();
     for i in 0..cs.num_advice_columns() {
-        plaf.columns.witness.push(ColumnWitness {
-            name: format!("w{:02}", i),
-            phase: column_phase[i] as usize,
-        });
+        plaf.columns.witness.push(ColumnWitness::new(
+            format!("w{:02}", i),
+            column_phase[i] as usize,
+        ));
     }
+
+    for (region_name, region) in assembly.regions {
+        for (column, name) in region.iter() {
+            let name = name.clone();
+            match column.column_type() {
+                Any::Advice(..) => plaf.columns.witness[column.index()].aliases.push(name),
+                Any::Fixed => plaf.columns.fixed[column.index()].aliases.push(name),
+                Any::Instance => plaf.columns.public[column.index()].aliases.push(name),
+            }
+        }
+    }
+
     for gate in cs.gates() {
         let name = gate.name();
         let len_log10 = (gate.polynomials().len() as f64).log10().ceil() as usize;
