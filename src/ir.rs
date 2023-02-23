@@ -101,13 +101,12 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
     }
 
     fn query_instance(&self, column: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
-        if !self.usable_rows.contains(&row) {
-            panic!(
-                "query_instance: row={} not in usable_rows={:?}",
-                row, self.usable_rows
-            );
-            // return Err(Error::not_enough_rows_available(self.k));
-        }
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}",
+            row,
+            self.usable_rows
+        );
 
         self.instance
             .get(column.index())
@@ -129,13 +128,12 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
-        if !self.usable_rows.contains(&row) {
-            panic!(
-                "assign_advice: row={} not in usable_rows={:?}",
-                row, self.usable_rows
-            );
-            // return Err(Error::not_enough_rows_available(self.k));
-        }
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}",
+            row,
+            self.usable_rows
+        );
 
         *self
             .advice
@@ -240,13 +238,12 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
-        if !self.usable_rows.contains(&row) {
-            panic!(
-                "enable_selector: row={} not in usable_rows={:?}",
-                row, self.usable_rows
-            );
-            // return Err(Error::not_enough_rows_available(self.k));
-        }
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={} not in usable_rows={:?}",
+            row,
+            self.usable_rows
+        );
 
         self.selectors[selector.index()][row] = true;
 
@@ -254,13 +251,12 @@ impl<F: Field> Assignment<F> for Assembly<F> {
     }
 
     fn query_instance(&self, _: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
-        if !self.usable_rows.contains(&row) {
-            panic!(
-                "query_instance: row={} not in usable_rows={:?}",
-                row, self.usable_rows
-            );
-            // return Err(Error::not_enough_rows_available(self.k));
-        }
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}",
+            row,
+            self.usable_rows
+        );
 
         // There is no instance in this context.
         Ok(Value::unknown())
@@ -296,13 +292,12 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
-        if !self.usable_rows.contains(&row) {
-            panic!(
-                "assign_fixed: row={} not in usable_rows={:?}",
-                row, self.usable_rows
-            );
-            // return Err(Error::not_enough_rows_available(self.k));
-        }
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}",
+            row,
+            self.usable_rows
+        );
 
         *self
             .fixed
@@ -321,14 +316,13 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         right_column: Column<Any>,
         right_row: usize,
     ) -> Result<(), Error> {
-        if !self.usable_rows.contains(&left_row) || !self.usable_rows.contains(&right_row) {
-            panic!(
-                "copy: rows={:?} not in usable_rows={:?}",
-                (left_row, right_row),
-                self.usable_rows
-            );
-            // return Err(Error::not_enough_rows_available(self.k));
-        }
+        assert!(
+            self.usable_rows.contains(&left_row) && self.usable_rows.contains(&right_row),
+            "left_row={}, right_row={}, usable_rows={:?}",
+            left_row,
+            right_row,
+            self.usable_rows
+        );
 
         // TODO: Sort columns
         let columns = self
@@ -345,13 +339,12 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         from_row: usize,
         to: Value<Assigned<F>>,
     ) -> Result<(), Error> {
-        if !self.usable_rows.contains(&from_row) {
-            panic!(
-                "fill_from_row: from_row={} not in usable_rows={:?}",
-                from_row, self.usable_rows
-            );
-            // return Err(Error::not_enough_rows_available(self.k));
-        }
+        assert!(
+            self.usable_rows.contains(&from_row),
+            "row={}, usable_rows={:?}",
+            from_row,
+            self.usable_rows
+        );
 
         for row in self.usable_rows.clone().skip(from_row) {
             self.assign_fixed(|| "", column, row, || to)?;
@@ -442,7 +435,7 @@ impl ColumnPublic {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Challenge {
     pub name: String,
     pub alias: Option<String>,
@@ -462,39 +455,39 @@ impl Challenge {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Columns {
     pub witness: Vec<ColumnWitness>,
     pub fixed: Vec<ColumnFixed>,
     pub public: Vec<ColumnPublic>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Poly {
     pub name: String,
     pub exp: Expr<Var>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Lookup {
     pub name: String,
     pub exps: (Vec<Expr<Var>>, Vec<Expr<Var>>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CopyC {
     pub columns: (expr::Column, expr::Column),
     pub offsets: Vec<(usize, usize)>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Info {
     pub num_rows: usize,
     pub challenges: Vec<Challenge>,
 }
 
-// Plonkish Arithmetization Format
-#[derive(Debug, Default)]
+/// Plonkish Arithmetization Format
+#[derive(Debug, Default, Clone)]
 pub struct Plaf {
     pub info: Info,
     pub columns: Columns,
@@ -666,7 +659,7 @@ pub fn get_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
     let n = 1 << k;
 
     let mut cs = ConstraintSystem::default();
-    let config = ConcreteCircuit::configure(&mut cs);
+    let config = circuit.configure(&mut cs);
 
     let instance = instance
         .into_iter()
@@ -725,13 +718,16 @@ pub fn gen_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
     let n = 1 << k;
 
     let mut cs = ConstraintSystem::default();
-    let config = ConcreteCircuit::configure(&mut cs);
+    let config = circuit.configure(&mut cs);
 
     let degree = cs.degree();
 
-    if n < cs.minimum_rows() {
-        panic!("not enough rows available, k = {}", k);
-    }
+    assert!(
+        n >= cs.minimum_rows(),
+        "n={}, minimum_rows={}",
+        n,
+        cs.minimum_rows()
+    );
 
     let mut assembly: Assembly<F> = Assembly {
         k,
@@ -865,4 +861,240 @@ pub fn gen_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         plaf.fixed.push(fixed);
     }
     Ok(plaf)
+}
+
+use halo2_proofs::circuit::Layouter;
+use halo2_proofs::circuit::SimpleFloorPlanner;
+use halo2_proofs::plonk::{
+    Expression::{self, Constant},
+    FirstPhase, SecondPhase, ThirdPhase, VirtualCells,
+};
+use halo2_proofs::poly::Rotation;
+
+/// Type that implements a halo2 circuit from a Plaf
+#[derive(Debug)]
+pub struct PlafH2Circuit {
+    plaf: Plaf,
+    wit: Witness,
+}
+
+#[derive(Debug, Clone)]
+pub struct H2Columns {
+    advice: Vec<Column<Advice>>,
+    fixed: Vec<Column<Fixed>>,
+    instance: Vec<Column<Instance>>,
+    challenges: Vec<Halo2Challenge>,
+}
+
+#[derive(Debug, Clone)]
+pub struct H2Config {
+    columns: H2Columns,
+}
+
+struct H2Queries<F: Field>(HashMap<(ColumnKind, usize, i32), Expression<F>>);
+
+impl<F: Field> H2Queries<F> {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn get(
+        &mut self,
+        meta: &mut VirtualCells<'_, F>,
+        columns: &H2Columns,
+        kind: ColumnKind,
+        index: usize,
+        rotation: i32,
+    ) -> Expression<F> {
+        let e = self
+            .0
+            .entry((kind, index, rotation))
+            .or_insert_with(|| match kind {
+                ColumnKind::Witness => meta.query_advice(columns.advice[index], Rotation(rotation)),
+                ColumnKind::Public => meta.query_fixed(columns.fixed[index], Rotation(rotation)),
+                ColumnKind::Fixed => {
+                    meta.query_instance(columns.instance[index], Rotation(rotation))
+                }
+            });
+        e.clone()
+    }
+}
+
+trait ToField<F: Field> {
+    fn to_field(&self) -> F;
+}
+
+impl<F: PrimeField<Repr = [u8; 32]>> ToField<F> for BigUint {
+    fn to_field(&self) -> F {
+        let mut repr: [u8; 32] = [0; 32];
+        let f_le = self.to_bytes_le();
+        repr.clone_from_slice(&f_le);
+        F::from_repr_vartime(repr).expect("value in field")
+    }
+}
+
+trait ToHalo2Expr<F: Field> {
+    fn to_halo2_expr(
+        &self,
+        meta: &mut VirtualCells<'_, F>,
+        columns: &H2Columns,
+        queries: &mut H2Queries<F>,
+    ) -> Expression<F>;
+}
+
+impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
+    fn to_halo2_expr(
+        &self,
+        meta: &mut VirtualCells<'_, F>,
+        columns: &H2Columns,
+        queries: &mut H2Queries<F>,
+    ) -> Expression<F> {
+        use Expression::*;
+        match self {
+            Expr::Const(f) => Constant(f.to_field()),
+            Expr::Var(v) => match v {
+                Var::ColumnQuery {
+                    column: expr::Column { kind, index },
+                    rotation,
+                } => queries.get(meta, columns, *kind, *index, *rotation),
+                Var::Challenge { index, phase: _ } => {
+                    meta.query_challenge(columns.challenges[*index])
+                }
+            },
+            Expr::Sum(es) => es.iter().fold(Constant(F::zero()), |acc, e| {
+                acc + e.to_halo2_expr(meta, columns, queries)
+            }),
+            Expr::Mul(es) => es.iter().fold(Constant(F::one()), |acc, e| {
+                acc * e.to_halo2_expr(meta, columns, queries)
+            }),
+            Expr::Neg(e) => -e.to_halo2_expr(meta, columns, queries),
+            Expr::Pow(e, n) => {
+                let e = e.to_halo2_expr(meta, columns, queries);
+                (1..*n).fold(e.clone(), |acc, _| acc * e.clone())
+            }
+        }
+    }
+}
+
+impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
+    type Config = H2Config;
+    type FloorPlanner = SimpleFloorPlanner;
+
+    fn without_witnesses(&self) -> Self {
+        Self {
+            plaf: self.plaf.clone(),
+            wit: Witness {
+                num_rows: self.wit.num_rows,
+                columns: Vec::new(),
+                witness: Vec::new(),
+            },
+        }
+    }
+
+    fn configure(&self, meta: &mut ConstraintSystem<F>) -> Self::Config {
+        // Allocate columns
+        let mut advice_columns = Vec::new();
+        for _column in &self.plaf.columns.witness {
+            advice_columns.push(meta.advice_column());
+        }
+        let mut fixed_columns = Vec::new();
+        for _column in &self.plaf.columns.fixed {
+            fixed_columns.push(meta.fixed_column());
+        }
+        let mut instance_columns = Vec::new();
+        for _column in &self.plaf.columns.public {
+            instance_columns.push(meta.instance_column());
+        }
+        let mut challenges = Vec::new();
+        for challenge in &self.plaf.info.challenges {
+            challenges.push(match challenge.phase {
+                1 => meta.challenge_usable_after(FirstPhase),
+                2 => meta.challenge_usable_after(SecondPhase),
+                3 => meta.challenge_usable_after(ThirdPhase),
+                p => panic!("Challenge phase {} not supported", p),
+            });
+        }
+        let columns = H2Columns {
+            advice: advice_columns,
+            fixed: fixed_columns,
+            instance: instance_columns,
+            challenges,
+        };
+
+        // Set polynomial constraints
+        meta.create_gate("main", |meta| {
+            // TODO: Annotate columns
+            let mut queries = H2Queries::new();
+            let mut constraints: Vec<(&'static str, Expression<F>)> = Vec::new();
+            for poly in &self.plaf.polys {
+                constraints.push((
+                    Box::leak(poly.name.clone().into_boxed_str()),
+                    poly.exp.to_halo2_expr(meta, &columns, &mut queries),
+                ));
+            }
+            constraints
+        });
+
+        // Set lookups
+        for lookup in &self.plaf.lookups {
+            meta.lookup_any(Box::leak(lookup.name.clone().into_boxed_str()), |meta| {
+                let mut queries = H2Queries::new();
+                let mut map = Vec::new();
+                for (lhs, rhs) in lookup.exps.0.iter().zip(lookup.exps.1.iter()) {
+                    map.push((
+                        lhs.to_halo2_expr(meta, &columns, &mut queries),
+                        rhs.to_halo2_expr(meta, &columns, &mut queries),
+                    ));
+                }
+                map
+            });
+        }
+
+        Self::Config { columns }
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        layouter.assign_region(
+            || "main",
+            |mut region| {
+                // Assign fixed columns
+                for (index, column) in self.plaf.fixed.iter().enumerate() {
+                    for (row, value) in column.iter().enumerate() {
+                        if let Some(value) = value {
+                            region.assign_fixed::<_, F, _, _>(
+                                || "",
+                                config.columns.fixed[index],
+                                row,
+                                || Value::known(value.to_field()),
+                            )?;
+                        }
+                    }
+                }
+                // Set copy constraints
+                for copy in &self.plaf.copys {
+                    let (left_col, right_col) = copy.columns;
+                }
+                // Assign advice columns
+                for (index, column) in self.wit.witness.iter().enumerate() {
+                    for (row, value) in column.iter().enumerate() {
+                        if let Some(value) = value {
+                            region.assign_advice::<_, F, _, _>(
+                                || "",
+                                config.columns.advice[index],
+                                row,
+                                || Value::known(value.to_field()),
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
 }

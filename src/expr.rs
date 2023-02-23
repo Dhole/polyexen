@@ -33,7 +33,7 @@ pub enum Expr<V: Var> {
     Sum(Vec<Expr<V>>),
     Mul(Vec<Expr<V>>),
     Neg(Box<Expr<V>>),
-    Pow(Box<Expr<V>>, BigUint),
+    Pow(Box<Expr<V>>, u32),
 }
 
 pub type Ex = Expr<String>;
@@ -44,7 +44,7 @@ pub fn get_field_p<F: Field + PrimeField<Repr = [u8; 32]>>() -> BigUint {
     p_1 + 1u64
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ColumnKind {
     Witness,
     Public,
@@ -365,9 +365,7 @@ impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
             }
             Const(f) => match (f.count_ones(), f.trailing_zeros()) {
                 // Express values greater-equal than 2^8 as 2^n
-                (1, Some(n)) if n >= 8 => {
-                    Pow(Box::new(Const(BigUint::from(2u32))), BigUint::from(n))
-                }
+                (1, Some(n)) if n >= 8 => Pow(Box::new(Const(BigUint::from(2u32))), n as u32),
                 _ => Const(f),
             },
             Var(v) => Var(v),
@@ -541,7 +539,7 @@ impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
                             // } else {
                             //     Mul(vec![elem, Pow(Box::new(base.clone()), BigUint::from(i))])
                             // };
-                            let e = Mul(vec![elem, Pow(Box::new(base.clone()), BigUint::from(i))]);
+                            let e = Mul(vec![elem, Pow(Box::new(base.clone()), i as u32)]);
                             xs.push(e);
                         }
                         return Sum(xs);
@@ -566,7 +564,7 @@ impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
             Sum(xs) => Sum(xs.into_iter().map(|e| e.normalize_pow()).collect()),
             Mul(xs) => {
                 let mut elems = Vec::new();
-                let mut pow: Option<(Self, usize)> = None;
+                let mut pow: Option<(Self, u32)> = None;
                 for x in xs {
                     let x = x.normalize_pow();
                     if let Some((base, exp)) = pow {
@@ -576,7 +574,7 @@ impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
                             if exp == 1 {
                                 elems.push(base);
                             } else {
-                                elems.push(Pow(Box::new(base), BigUint::from(exp)));
+                                elems.push(Pow(Box::new(base), exp));
                             }
                             pow = Some((x, 1));
                         }
@@ -588,7 +586,7 @@ impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
                     if exp == 1 {
                         elems.push(base);
                     } else {
-                        elems.push(Pow(Box::new(base), BigUint::from(exp)));
+                        elems.push(Pow(Box::new(base), exp));
                     }
                 }
                 Mul(elems)
