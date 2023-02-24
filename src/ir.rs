@@ -803,7 +803,8 @@ pub fn gen_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         let len_log10 = (gate.polynomials().len() as f64).log10().ceil() as usize;
         for (i, poly) in gate.polynomials().iter().enumerate() {
             let exp = Expr::<Var>::from(poly);
-            let exp = exp.simplify(&p);
+            // FIXME: There's a bug in simplify, tested with bytecode circuit
+            // let exp = exp.simplify(&p);
             if matches!(exp, Expr::Const(_)) {
                 // Skip constant expressions (which should be `p(x) = 0`)
                 continue;
@@ -863,8 +864,7 @@ pub fn gen_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
     Ok(plaf)
 }
 
-use halo2_proofs::circuit::Layouter;
-use halo2_proofs::circuit::SimpleFloorPlanner;
+use halo2_proofs::circuit::{Cell, Layouter, RegionIndex, SimpleFloorPlanner};
 use halo2_proofs::plonk::{
     Expression::{self, Constant},
     FirstPhase, SecondPhase, ThirdPhase, VirtualCells,
@@ -874,8 +874,8 @@ use halo2_proofs::poly::Rotation;
 /// Type that implements a halo2 circuit from a Plaf
 #[derive(Debug)]
 pub struct PlafH2Circuit {
-    plaf: Plaf,
-    wit: Witness,
+    pub plaf: Plaf,
+    pub wit: Witness,
 }
 
 #[derive(Debug, Clone)]
@@ -911,10 +911,10 @@ impl<F: Field> H2Queries<F> {
             .entry((kind, index, rotation))
             .or_insert_with(|| match kind {
                 ColumnKind::Witness => meta.query_advice(columns.advice[index], Rotation(rotation)),
-                ColumnKind::Public => meta.query_fixed(columns.fixed[index], Rotation(rotation)),
-                ColumnKind::Fixed => {
+                ColumnKind::Public => {
                     meta.query_instance(columns.instance[index], Rotation(rotation))
                 }
+                ColumnKind::Fixed => meta.query_fixed(columns.fixed[index], Rotation(rotation)),
             });
         e.clone()
     }
@@ -928,7 +928,7 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToField<F> for BigUint {
     fn to_field(&self) -> F {
         let mut repr: [u8; 32] = [0; 32];
         let f_le = self.to_bytes_le();
-        repr.clone_from_slice(&f_le);
+        repr[..f_le.len()].clone_from_slice(&f_le);
         F::from_repr_vartime(repr).expect("value in field")
     }
 }
@@ -958,15 +958,25 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
                     rotation,
                 } => queries.get(meta, columns, *kind, *index, *rotation),
                 Var::Challenge { index, phase: _ } => {
-                    meta.query_challenge(columns.challenges[*index])
+                    // FIXME: Figure out a way to use challenges
+                    // meta.query_challenge(columns.challenges[*index])
+                    Constant(F::from(0x100))
                 }
             },
-            Expr::Sum(es) => es.iter().fold(Constant(F::zero()), |acc, e| {
-                acc + e.to_halo2_expr(meta, columns, queries)
-            }),
-            Expr::Mul(es) => es.iter().fold(Constant(F::one()), |acc, e| {
-                acc * e.to_halo2_expr(meta, columns, queries)
-            }),
+            Expr::Sum(es) => {
+                let mut iter = es.iter();
+                let first = iter.next().unwrap().to_halo2_expr(meta, columns, queries);
+                iter.fold(first, |acc, e| {
+                    acc + e.to_halo2_expr(meta, columns, queries)
+                })
+            }
+            Expr::Mul(es) => {
+                let mut iter = es.iter();
+                let first = iter.next().unwrap().to_halo2_expr(meta, columns, queries);
+                iter.fold(first, |acc, e| {
+                    acc * e.to_halo2_expr(meta, columns, queries)
+                })
+            }
             Expr::Neg(e) => -e.to_halo2_expr(meta, columns, queries),
             Expr::Pow(e, n) => {
                 let e = e.to_halo2_expr(meta, columns, queries);
@@ -974,6 +984,24 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
             }
         }
     }
+}
+
+struct _Cell {
+    region_index: RegionIndex,
+    row_offset: usize,
+    column: Column<Any>,
+}
+
+fn new_cell(column: Column<Any>, offset: usize) -> Cell {
+    let cell = _Cell {
+        region_index: RegionIndex::from(0),
+        row_offset: offset,
+        column,
+    };
+    // NOTE: We use unsafe here to construct a Cell, which doesn't have a public constructor.  This
+    // helps us set the copy constraints easily (without having to store all assigned cells
+    // previously)
+    unsafe { std::mem::transmute::<_Cell, Cell>(cell) }
 }
 
 impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
@@ -994,8 +1022,13 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
     fn configure(&self, meta: &mut ConstraintSystem<F>) -> Self::Config {
         // Allocate columns
         let mut advice_columns = Vec::new();
-        for _column in &self.plaf.columns.witness {
-            advice_columns.push(meta.advice_column());
+        for column in &self.plaf.columns.witness {
+            advice_columns.push(match column.phase {
+                0 => meta.advice_column_in(FirstPhase),
+                1 => meta.advice_column_in(SecondPhase),
+                2 => meta.advice_column_in(ThirdPhase),
+                _ => panic!("Advice column at phase {} not supported", column.phase),
+            });
         }
         let mut fixed_columns = Vec::new();
         for _column in &self.plaf.columns.fixed {
@@ -1008,9 +1041,9 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
         let mut challenges = Vec::new();
         for challenge in &self.plaf.info.challenges {
             challenges.push(match challenge.phase {
-                1 => meta.challenge_usable_after(FirstPhase),
-                2 => meta.challenge_usable_after(SecondPhase),
-                3 => meta.challenge_usable_after(ThirdPhase),
+                0 => meta.challenge_usable_after(FirstPhase),
+                1 => meta.challenge_usable_after(SecondPhase),
+                2 => meta.challenge_usable_after(ThirdPhase),
                 p => panic!("Challenge phase {} not supported", p),
             });
         }
@@ -1021,9 +1054,16 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
             challenges,
         };
 
+        // Name columns for lookups
+        for (index, column) in columns.advice.iter().enumerate() {
+            meta.annotate_lookup_any_column(*column, || self.plaf.columns.witness[index].name());
+        }
+        for (index, column) in columns.fixed.iter().enumerate() {
+            meta.annotate_lookup_any_column(*column, || self.plaf.columns.fixed[index].name());
+        }
+
         // Set polynomial constraints
         meta.create_gate("main", |meta| {
-            // TODO: Annotate columns
             let mut queries = H2Queries::new();
             let mut constraints: Vec<(&'static str, Expression<F>)> = Vec::new();
             for poly in &self.plaf.polys {
@@ -1061,6 +1101,17 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
         layouter.assign_region(
             || "main",
             |mut region| {
+                // Name columns
+                for (index, column) in config.columns.advice.iter().enumerate() {
+                    region.name_column(|| self.plaf.columns.witness[index].name(), *column);
+                }
+                for (index, column) in config.columns.fixed.iter().enumerate() {
+                    region.name_column(|| self.plaf.columns.fixed[index].name(), *column);
+                }
+                for (index, column) in config.columns.instance.iter().enumerate() {
+                    region.name_column(|| self.plaf.columns.public[index].name(), *column);
+                }
+
                 // Assign fixed columns
                 for (index, column) in self.plaf.fixed.iter().enumerate() {
                     for (row, value) in column.iter().enumerate() {
@@ -1074,9 +1125,24 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                         }
                     }
                 }
+                let to_column_any = |col: &expr::Column| -> Column<Any> {
+                    match col.kind {
+                        ColumnKind::Witness => config.columns.advice[col.index].into(),
+                        ColumnKind::Public => config.columns.instance[col.index].into(),
+                        ColumnKind::Fixed => config.columns.fixed[col.index].into(),
+                    }
+                };
                 // Set copy constraints
                 for copy in &self.plaf.copys {
-                    let (left_col, right_col) = copy.columns;
+                    let (left_col, right_col) = &copy.columns;
+                    let left_col = to_column_any(left_col);
+                    let right_col = to_column_any(right_col);
+                    for (left_offset, right_offset) in &copy.offsets {
+                        region.constrain_equal(
+                            new_cell(left_col, *left_offset),
+                            new_cell(right_col, *right_offset),
+                        )?;
+                    }
                 }
                 // Assign advice columns
                 for (index, column) in self.wit.witness.iter().enumerate() {
