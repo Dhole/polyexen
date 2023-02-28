@@ -524,8 +524,13 @@ impl Plaf {
             }
         }
     }
-    pub fn set_challange_alias(&mut self, index: usize, name: String) {
-        self.info.challenges[index].alias = Some(name)
+    pub fn set_challange_alias(&mut self, index: usize, name: String) -> bool {
+        if let Some(mut challange) = self.info.challenges.get_mut(index) {
+            challange.alias = Some(name);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -804,7 +809,7 @@ pub fn gen_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         for (i, poly) in gate.polynomials().iter().enumerate() {
             let exp = Expr::<Var>::from(poly);
             // FIXME: There's a bug in simplify, tested with bytecode circuit
-            // let exp = exp.simplify(&p);
+            let exp = exp.simplify(&p);
             if matches!(exp, Expr::Const(_)) {
                 // Skip constant expressions (which should be `p(x) = 0`)
                 continue;
@@ -979,8 +984,12 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
             }
             Expr::Neg(e) => -e.to_halo2_expr(meta, columns, queries),
             Expr::Pow(e, n) => {
-                let e = e.to_halo2_expr(meta, columns, queries);
-                (1..*n).fold(e.clone(), |acc, _| acc * e.clone())
+                if *n == 0 {
+                    Constant(F::from(1))
+                } else {
+                    let e = e.to_halo2_expr(meta, columns, queries);
+                    (1..*n).fold(e.clone(), |acc, _| acc * e.clone())
+                }
             }
         }
     }

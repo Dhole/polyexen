@@ -478,9 +478,10 @@ impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
                         }
                         // When elem is 0, this "r * (0 + r * (10 ..))" becomes this
                         // "r * r * (10 ..)"
+                        let mut zeros = 0;
                         for v in &ys[1..ys.len() - 1] {
                             if Some(v) == base.as_ref() {
-                                elems.push(Const(BigUint::zero()));
+                                zeros += 1;
                                 continue;
                             }
                             return false;
@@ -496,6 +497,7 @@ impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
                         };
                         if Some(mul_lhs) == base.as_ref() {
                             elems.push(sum_lhs.clone());
+                            (0..zeros).for_each(|_| elems.push(Const(BigUint::zero())));
                             if mul_rhs.is_terminal() {
                                 elems.push(mul_rhs.clone());
                                 return true;
@@ -912,6 +914,27 @@ mod tests_with_parser {
         // println!("{:?}", e1.normalize_linear_comb());
         let s2 = format!("{}", e2);
         assert_eq!(s2, e2_str);
+    }
+
+    #[test]
+    fn test_normalize_linear_comb_bug_1() {
+        let p = BigUint::from(0x10000u64 - 15);
+        let e1_str = "1*BYTECODE_q_enable*(1 - 1*(1 - 1*(1 - tag)*(1 - tag[1]))*(1 - BYTECODE_q_last))*(code_hash - (((((((((((((((((((((((((((((((197*r_word + 210)*r_word + 70)*r_word + 1)*r_word + 134)*r_word + 247)*r_word + 35)*r_word + 60)*r_word + 146)*r_word + 126)*r_word + 125)*r_word + 178)*r_word + 220)*r_word + 199)*r_word + 3)*r_word + 192)*r_word + 229)*r_word + 0)*r_word + 182)*r_word + 83)*r_word + 202)*r_word + 130)*r_word + 39)*r_word + 59)*r_word + 123)*r_word + 250)*r_word + 216)*r_word + 4)*r_word + 93)*r_word + 133)*r_word + 164)*r_word + 112))";
+        let e1 = parse_expr(e1_str).unwrap();
+        let e2 = e1.clone().simplify(&p);
+        println!("{}", e2);
+
+        let vars: HashMap<String, BigUint> = {
+            let mut rng = ChaCha20Rng::seed_from_u64(0);
+            let mut vars: Vec<String> = e1.vars().into_iter().collect();
+            vars.sort();
+            vars.iter()
+                .map(|v| (v.to_string(), rand(&mut rng, &p)))
+                .collect()
+        };
+        let eval1 = e1.eval(&p, &vars);
+        let eval2 = e2.eval(&p, &vars);
+        assert_eq!(eval1, eval2);
     }
 
     #[test]
