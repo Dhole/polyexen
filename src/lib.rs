@@ -6,5 +6,5 @@ extern crate lazy_static;
 
 pub mod analyze;
 pub mod expr;
-pub mod ir;
 pub mod parser;
+pub mod plaf;

@@ -2,8 +2,7 @@ use crate::expr::{Ex, Expr};
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{cast::ToPrimitive, One, Zero};
-use std::collections::hash_map::RandomState;
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::RandomState, HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub enum Bound {
@@ -150,7 +149,7 @@ pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
         }
     }
     if let Some(var) = var {
-        if let Some(attrs) = analysis.vars_attrs.get(&var) {
+        if let Some(_attrs) = analysis.vars_attrs.get(&var) {
             unimplemented!();
         } else {
             analysis.vars_attrs.insert(
