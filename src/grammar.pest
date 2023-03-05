@@ -1,13 +1,15 @@
 dec = @{ ASCII_DIGIT+ }
-hex = @{ASCII_HEX_DIGIT+}
+hex = @{ ASCII_HEX_DIGIT+ }
 hex_0x = _{ "0x" ~ hex }
 num = _{ hex_0x | dec }
-var = @{ (ASCII_ALPHANUMERIC | "," | "." | ":" | ";" | "?" | "@" | "[" | "]" | "_")+  }
+index = _{ "[" ~ "-"? ~ ASCII_DIGIT+ ~ "]" }
+var = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "," | "." | ":" | ";" | "?" | "@" | "_" )* ~ index? }
 
-operation = _{ add | subtract | multiply }
+operation = _{ add | subtract | multiply | exp }
     add      = { "+" }
     subtract = { "-" }
     multiply = { "*" }
+    exp = { "^" }
 
 expr = { term ~ (operation ~ term)* }
 term = _{ neg | subterm }

@@ -6,11 +6,13 @@ use num_bigint::{BigInt, BigUint, RandBigInt, Sign};
 use num_integer::Integer;
 use num_traits::{One, ToPrimitive, Zero};
 use rand::Rng;
-use std::cmp::{Eq, Ord, Ordering, PartialEq};
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug, Display, Write};
-use std::hash::Hash;
-use std::ops::{Add, Mul, Neg, Sub};
+use std::{
+    cmp::{Eq, Ord, Ordering, PartialEq},
+    collections::{HashMap, HashSet},
+    fmt::{self, Debug, Display, Write},
+    hash::Hash,
+    ops::{Add, Mul, Neg, Sub},
+};
 
 // trait Field: Add + Sub + Mul + Neg + Clone + Sized + Debug {
 //     fn q() -> Self;
@@ -894,6 +896,10 @@ mod tests_with_parser {
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
+    fn prime() -> BigUint {
+        BigUint::from(0x10000u64 - 15)
+    }
+
     #[test]
     fn test_test_eq() {
         let mut rng = ChaCha20Rng::seed_from_u64(0);
@@ -906,9 +912,9 @@ mod tests_with_parser {
 
     #[test]
     fn test_simplify_linear_comb() {
-        let p = BigUint::from(0x10000u64 - 15);
+        let p = prime();
         let e1_str = "112 + r_word*(164 + r_word*(133 + r_word*(93 + r_word*(4 + r_word*(216 + r_word*(250 + r_word*(123 + r_word*(59 + r_word*(39 + r_word*(130 + r_word*(202 + r_word*(83 + r_word*(182 + r_word*r_word*(229 + r_word*(192 + r_word*(3 + r_word*(199 + r_word*(220 + r_word*(178 + r_word*(125 + r_word*(126 + r_word*(146 + r_word*(60 + r_word*(35 + r_word*(247 + r_word*(134 + r_word*(1 + r_word*(70 + r_word*(210 + 197*r_word)))))))))))))))))))))))))))))";
-        let e2_str = "112*r_word^0 + 164*r_word^1 + 133*r_word^2 + 93*r_word^3 + 4*r_word^4 + 216*r_word^5 + 250*r_word^6 + 123*r_word^7 + 59*r_word^8 + 39*r_word^9 + 130*r_word^10 + 202*r_word^11 + 83*r_word^12 + 0*r_word^13 + 182*r_word^14 + 229*r_word^15 + 192*r_word^16 + 3*r_word^17 + 199*r_word^18 + 220*r_word^19 + 178*r_word^20 + 125*r_word^21 + 126*r_word^22 + 146*r_word^23 + 60*r_word^24 + 35*r_word^25 + 247*r_word^26 + 134*r_word^27 + 1*r_word^28 + 70*r_word^29 + 210*r_word^30 + 197*r_word^31";
+        let e2_str = "112*r_word^0 + 164*r_word^1 + 133*r_word^2 + 93*r_word^3 + 4*r_word^4 + 216*r_word^5 + 250*r_word^6 + 123*r_word^7 + 59*r_word^8 + 39*r_word^9 + 130*r_word^10 + 202*r_word^11 + 83*r_word^12 + 182*r_word^13 + 0*r_word^14 + 229*r_word^15 + 192*r_word^16 + 3*r_word^17 + 199*r_word^18 + 220*r_word^19 + 178*r_word^20 + 125*r_word^21 + 126*r_word^22 + 146*r_word^23 + 60*r_word^24 + 35*r_word^25 + 247*r_word^26 + 134*r_word^27 + 1*r_word^28 + 70*r_word^29 + 210*r_word^30 + 197*r_word^31";
         let e1 = parse_expr(e1_str).unwrap();
         let e2 = e1.simplify(&p);
         // println!("{:?}", e1.normalize_linear_comb());
@@ -918,7 +924,7 @@ mod tests_with_parser {
 
     #[test]
     fn test_normalize_linear_comb_bug_1() {
-        let p = BigUint::from(0x10000u64 - 15);
+        let p = prime();
         let e1_str = "1*BYTECODE_q_enable*(1 - 1*(1 - 1*(1 - tag)*(1 - tag[1]))*(1 - BYTECODE_q_last))*(code_hash - (((((((((((((((((((((((((((((((197*r_word + 210)*r_word + 70)*r_word + 1)*r_word + 134)*r_word + 247)*r_word + 35)*r_word + 60)*r_word + 146)*r_word + 126)*r_word + 125)*r_word + 178)*r_word + 220)*r_word + 199)*r_word + 3)*r_word + 192)*r_word + 229)*r_word + 0)*r_word + 182)*r_word + 83)*r_word + 202)*r_word + 130)*r_word + 39)*r_word + 59)*r_word + 123)*r_word + 250)*r_word + 216)*r_word + 4)*r_word + 93)*r_word + 133)*r_word + 164)*r_word + 112))";
         let e1 = parse_expr(e1_str).unwrap();
         let e2 = e1.clone().simplify(&p);
@@ -939,7 +945,7 @@ mod tests_with_parser {
 
     #[test]
     fn test_simplify_pow() {
-        let p = BigUint::from(0x10000u64 - 15);
+        let p = prime();
         let e1_str =
             "4*(r_word + r_word*r_word + r_word*r_word*r_word + r_word*r_word*r_word*r_word)";
         let e2_str = "4*(r_word + r_word^2 + r_word^3 + r_word^4)";

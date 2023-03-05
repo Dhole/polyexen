@@ -19,8 +19,6 @@ impl Bound {
             return Self::Set(vec![]);
         } else if set.len() == 1 {
             return Self::Set(vec![set[0].clone()]);
-        } else if set.len() == 2 {
-            return Self::Set(vec![set[0].clone(), set[1].clone()]);
         }
         let mut inc = set[0].clone();
         for v in &set {
@@ -132,42 +130,27 @@ fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
 }
 
 pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
-    let (exhaustive, solutions) = find_solutions(e);
-    let mut var: Option<String> = None;
-    let mut sols = Vec::new();
+    let (exhaustive, solutions_list) = find_solutions(e);
+    let mut solutions = HashMap::new();
     if exhaustive {
-        for (v, c) in &solutions {
-            if let Some(prev_v) = &var {
-                if v != prev_v {
-                    var = None;
-                    break;
-                }
-            } else {
-                var = Some(v.clone());
-            }
-            sols.push(c);
+        for (var, value) in &solutions_list {
+            solutions
+                .entry(var)
+                .and_modify(|values: &mut Vec<BigInt>| values.push(value.clone()))
+                .or_insert(vec![value.clone()]);
         }
     }
-    if let Some(var) = var {
-        if let Some(_attrs) = analysis.vars_attrs.get(&var) {
-            unimplemented!();
-        } else {
-            analysis.vars_attrs.insert(
-                var,
-                Attrs {
-                    bound: Bound::new(sols.into_iter().map(|c| to_biguint(c.clone(), p))),
-                },
-            );
-        }
-    } else {
-        for (v, _) in solutions {
-            analysis.vars_attrs.insert(
-                v,
-                Attrs {
-                    bound: Bound::new_range(BigUint::zero(), p.clone() - BigUint::one()),
-                },
-            );
-        }
+    let bound_base = Bound::new_range(BigUint::zero(), p.clone() - BigUint::one());
+    for var in e.vars().iter() {
+        let bound = match solutions.get(var) {
+            Some(values) => Bound::new(values.into_iter().map(|c| to_biguint(c.clone(), p))),
+            None => bound_base.clone(),
+        };
+        analysis
+            .vars_attrs
+            .entry(var.clone())
+            .and_modify(|attrs| attrs.bound.intersection(&bound))
+            .or_insert(Attrs { bound });
     }
 }
 
@@ -234,9 +217,15 @@ mod tests_with_parser {
     use super::*;
     use crate::parser::parse_expr;
 
+    // Return a prime for testing
+    fn prime() -> BigUint {
+        BigUint::parse_bytes(b"100000000000000000000000000000000", 16).unwrap()
+            - BigUint::from(159u64)
+    }
+
     #[test]
     fn test_find_solutions() {
-        for (e_str, sol_str, expected_exh) in [
+        for (e_str, sol_str, expected_exhaustive) in [
             ("(a - 5) * (b + 8)", vec![("a", "5"), ("b", "-8")], true),
             ("(a - 5) * (a - 7)", vec![("a", "5"), ("a", "7")], true),
             ("(-a + 5) * (-a - 7)", vec![("a", "5"), ("a", "-7")], true),
@@ -245,7 +234,7 @@ mod tests_with_parser {
             (
                 "(a - 0) * (a - 1) * (a - 2) * (a - 3)",
                 vec![("a", "0"), ("a", "1"), ("a", "2"), ("a", "3")],
-                false,
+                true,
             ),
         ] {
             let e = parse_expr(e_str).unwrap();
@@ -259,15 +248,14 @@ mod tests_with_parser {
 
             let (exhaustive, mut solutions) = find_solutions(&e);
             solutions.sort();
-            assert_eq!(exhaustive, expected_exh);
+            assert_eq!(exhaustive, expected_exhaustive, "{}", e_str);
             assert_eq!(solutions, expected_solutions, "{}", e_str);
         }
     }
 
     #[test]
     fn test_find_bounds_poly() {
-        let p = BigUint::parse_bytes(b"100000000000000000000000000000000", 16).unwrap()
-            - BigUint::from(159u64);
+        let p = prime();
 
         let poly1 = parse_expr("(a - 0) * (a - 1)").unwrap();
         let mut analysis = Analysis::new();
@@ -288,8 +276,7 @@ mod tests_with_parser {
 
     #[test]
     fn test_carlos() {
-        let p = BigUint::parse_bytes(b"100000000000000000000000000000000", 16).unwrap()
-            - BigUint::from(159u64);
+        let p = prime();
         let poly1 = parse_expr("(x - 4) * (x - 1) * x * (x - 2) * (x - 3)").unwrap();
         let mut analysis = Analysis::new();
         find_bounds_poly(&poly1, &p, &mut analysis);

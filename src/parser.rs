@@ -1,4 +1,5 @@
 use crate::expr::{Ex, Expr};
+use num_traits::ToPrimitive;
 
 use num_bigint::BigUint;
 
@@ -9,8 +10,7 @@ use pest::{error::Error, Parser};
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
 struct ExprParser;
-use pest::iterators::Pairs;
-use pest::pratt_parser::PrattParser;
+use pest::{iterators::Pairs, pratt_parser::PrattParser};
 
 lazy_static! {
     static ref PRATT_PARSER: PrattParser<Rule> = {
@@ -20,28 +20,33 @@ lazy_static! {
         PrattParser::new()
             .op(Op::infix(add, Left) | Op::infix(subtract, Left))
             .op(Op::infix(multiply, Left))
+            .op(Op::infix(exp, Left))
     };
 }
 
 pub fn parse_expr_pairs(expression: Pairs<Rule>) -> Ex {
     use Expr::*;
     PRATT_PARSER
-        .map_primary(|primary| match primary.as_rule() {
-            Rule::dec => (
-                Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 10).unwrap()),
-                true,
-            ),
-            Rule::hex => (
-                Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 16).unwrap()),
-                true,
-            ),
-            Rule::var => (Var(primary.as_str().to_string()), true),
-            Rule::neg => (Neg(Box::new(parse_expr_pairs(primary.into_inner()))), true),
-            Rule::expr => (parse_expr_pairs(primary.into_inner()), false),
-            _ => unreachable!(),
+        .map_primary(|primary| {
+            dbg!(&primary);
+            match primary.as_rule() {
+                Rule::dec => (
+                    Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 10).unwrap()),
+                    true,
+                ),
+                Rule::hex => (
+                    Const(BigUint::parse_bytes(primary.as_str().as_bytes(), 16).unwrap()),
+                    true,
+                ),
+                Rule::var => (Var(primary.as_str().to_string()), true),
+                Rule::neg => (Neg(Box::new(parse_expr_pairs(primary.into_inner()))), true),
+                Rule::expr => (parse_expr_pairs(primary.into_inner()), false),
+                _ => unreachable!(),
+            }
         })
         // lcont and rcont tell wether the lhs and rhs terms belong to the same expr or not
         .map_infix(|(lhs, lcont), op, (rhs, rcont)| {
+            dbg!(&lhs, &op, &rhs);
             (
                 match op.as_rule() {
                     Rule::add => match (lhs, rhs, lcont & rcont) {
@@ -73,6 +78,13 @@ pub fn parse_expr_pairs(expression: Pairs<Rule>) -> Ex {
                         }
                         (lhs, rhs, _) => Mul(vec![lhs, rhs]),
                     },
+                    Rule::exp => {
+                        let rhs = match rhs {
+                            Const(c) => c.to_u32().expect("exponent fits in u32"),
+                            _ => unreachable!(),
+                        };
+                        Pow(Box::new(lhs), rhs)
+                    }
                     _ => unreachable!(),
                 },
                 true,
@@ -133,5 +145,13 @@ mod tests {
         // let e = parse_expr_pairs(r.unwrap());
         // println!("{:?}", e);
         // println!("{}", e);
+    }
+
+    #[test]
+    fn test_parser_bug_1() {
+        let e1_str = "f05*w77*w78*w79*w80*(1 - w76)*(w26 - w26[-1]*2^0 + w25[-1]*2^1 + w24[-1]*2^2 + w23[-1]*2^3)";
+        let e1 = parse_expr(e1_str).unwrap();
+        let e2_str = format!("{}", e1);
+        assert_eq!(e1_str, e2_str);
     }
 }
