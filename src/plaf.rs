@@ -1,4 +1,4 @@
-use crate::expr::{self, ColumnKind, Expr, PlonkVar as Var};
+use crate::expr::{self, Column, ColumnKind, Expr, PlonkVar as Var};
 use num_bigint::BigUint;
 use std::fmt::{self, Debug, Display, Write};
 
@@ -168,6 +168,41 @@ pub struct Plaf {
     pub lookups: Vec<Lookup>,
     pub copys: Vec<CopyC>,
     pub fixed: Vec<Vec<Option<BigUint>>>,
+}
+
+pub struct VarDisplay<'a> {
+    pub v: &'a Var,
+    pub plaf: &'a Plaf,
+}
+
+impl Display for VarDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ColumnKind::*;
+        use Var::*;
+        match self.v {
+            ColumnQuery {
+                column: Column { kind, index },
+                rotation,
+            } => {
+                write!(
+                    f,
+                    "{}",
+                    match kind {
+                        Witness => self.plaf.columns.witness[*index].name(),
+                        Public => self.plaf.columns.public[*index].name(),
+                        Fixed => self.plaf.columns.fixed[*index].name(),
+                    },
+                )?;
+                if *rotation != 0 {
+                    write!(f, "[{}]", rotation)?;
+                }
+            }
+            Challenge { index, phase: _ } => {
+                write!(f, "{}", self.plaf.info.challenges[*index].name())?
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Plaf {

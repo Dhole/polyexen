@@ -23,7 +23,7 @@ use std::{
 //     fn is_one(&self) -> bool;
 // }
 
-pub trait Var: Clone + Debug + PartialEq {}
+pub trait Var: Clone + Debug + PartialEq + Eq + Hash + Ord + Display {}
 
 impl Var for &'static str {}
 impl Var for String {}
@@ -315,7 +315,7 @@ fn mul(lhs: BigUint, rhs: &BigUint, p: &BigUint) -> BigUint {
     (lhs * rhs).mod_floor(p)
 }
 
-impl<V: Var + Eq + Hash + Ord + Display> Expr<V> {
+impl<V: Var> Expr<V> {
     pub fn eval(&self, p: &BigUint, vars: &HashMap<V, BigUint>) -> BigUint {
         use Expr::*;
         match self {

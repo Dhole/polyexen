@@ -1,4 +1,4 @@
-use crate::expr::{Ex, Expr};
+use crate::expr::{Expr, Var};
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{cast::ToPrimitive, One, Zero};
@@ -108,11 +108,11 @@ pub struct Attrs {
 }
 
 #[derive(Debug)]
-pub struct Analysis {
-    pub vars_attrs: HashMap<String, Attrs>,
+pub struct Analysis<V> {
+    pub vars_attrs: HashMap<V, Attrs>,
 }
 
-impl Analysis {
+impl<V> Analysis<V> {
     pub fn new() -> Self {
         Self {
             vars_attrs: HashMap::new(),
@@ -129,7 +129,7 @@ fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
     }
 }
 
-pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
+pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysis<V>) {
     let (exhaustive, solutions_list) = find_solutions(e);
     let mut solutions = HashMap::new();
     if exhaustive {
@@ -139,6 +139,11 @@ pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
                 .and_modify(|values: &mut Vec<BigInt>| values.push(value.clone()))
                 .or_insert(vec![value.clone()]);
         }
+    }
+    // If there are several exhaustive solutions but they involve different variables, we can't
+    // bound any variable.
+    if solutions.keys().count() > 1 {
+        solutions = HashMap::new();
     }
     let bound_base = Bound::new_range(BigUint::zero(), p.clone() - BigUint::one());
     for var in e.vars().iter() {
@@ -154,49 +159,51 @@ pub fn find_bounds_poly(e: &Ex, p: &BigUint, analysis: &mut Analysis) {
     }
 }
 
-// Attempt to find solutions to `e(X) == 0` by matching on the pattern `(x - A)(y - B)...`.
-// Returns true when the solutions returned are exhaustive.
-pub fn find_solutions(e: &Ex) -> (bool, Vec<(String, BigInt)>) {
+fn find_solutions_base<V: Var>(e: &Expr<V>) -> (bool, Vec<(V, BigInt)>) {
     use Expr::*;
-    fn find_solutions_base(e: &Ex) -> (bool, Vec<(String, BigInt)>) {
-        match e {
-            Const(_) => (true, Vec::new()),
-            Var(v) => (true, vec![(v.clone(), BigInt::zero())]),
-            Neg(e) => find_solutions_base(e),
-            Sum(es) => {
-                let mut var: Option<String> = None;
-                let mut con: Option<BigInt> = None;
-                let mut neg = false;
-                for e in es {
-                    match (e, &var, &con) {
+    match e {
+        Const(_) => (true, Vec::new()),
+        Var(v) => (true, vec![(v.clone(), BigInt::zero())]),
+        Neg(e) => find_solutions_base(e),
+        Sum(es) => {
+            let mut var: Option<V> = None;
+            let mut con: Option<BigInt> = None;
+            let mut neg = false;
+            for e in es {
+                match (e, &var, &con) {
+                    (Const(c), _, None) => {
+                        neg ^= true;
+                        con = Some(c.clone().into());
+                    }
+                    (Var(v), None, _) => {
+                        var = Some(v.clone());
+                    }
+                    (Neg(e), _, _) => match (&**e, &var, &con) {
                         (Const(c), _, None) => {
-                            neg ^= true;
                             con = Some(c.clone().into());
                         }
                         (Var(v), None, _) => {
+                            neg ^= true;
                             var = Some(v.clone());
                         }
-                        (Neg(e), _, _) => match (&**e, &var, &con) {
-                            (Const(c), _, None) => {
-                                con = Some(c.clone().into());
-                            }
-                            (Var(v), None, _) => {
-                                neg ^= true;
-                                var = Some(v.clone());
-                            }
-                            _ => return (false, Vec::new()),
-                        },
                         _ => return (false, Vec::new()),
-                    }
+                    },
+                    _ => return (false, Vec::new()),
                 }
-                if neg {
-                    con = Some(-con.unwrap());
-                }
-                (true, vec![(var.unwrap(), con.unwrap())])
             }
-            _ => (false, Vec::new()),
+            if neg {
+                con = Some(-con.unwrap());
+            }
+            (true, vec![(var.unwrap(), con.unwrap())])
         }
+        _ => (false, Vec::new()),
     }
+}
+
+// Attempt to find solutions to `e(X) == 0` by matching on the pattern `(x - A)(y - B)...`.
+// Returns true when the solutions returned are exhaustive.
+pub fn find_solutions<V: Var>(e: &Expr<V>) -> (bool, Vec<(V, BigInt)>) {
+    use Expr::*;
     match e {
         Mul(es) => {
             let mut exhaustive = true;
