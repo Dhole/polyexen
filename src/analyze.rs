@@ -4,7 +4,7 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{cast::ToPrimitive, One, Zero};
 use std::collections::{hash_map::RandomState, HashMap, HashSet};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Bound {
     Range(BigUint, BigUint), // x in [start..end]
     Set(Vec<BigUint>),       // non contiguous set, always sorted
@@ -129,6 +129,10 @@ fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
     }
 }
 
+pub fn bound_base(p: &BigUint) -> Bound {
+    Bound::new_range(BigUint::zero(), p.clone() - BigUint::one())
+}
+
 pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysis<V>) {
     let (exhaustive, solutions_list) = find_solutions(e);
     let mut solutions = HashMap::new();
@@ -145,7 +149,7 @@ pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysi
     if solutions.keys().count() > 1 {
         solutions = HashMap::new();
     }
-    let bound_base = Bound::new_range(BigUint::zero(), p.clone() - BigUint::one());
+    let bound_base = bound_base(p);
     for var in e.vars().iter() {
         let bound = match solutions.get(var) {
             Some(values) => Bound::new(values.into_iter().map(|c| to_biguint(c.clone(), p))),

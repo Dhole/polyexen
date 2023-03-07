@@ -53,13 +53,13 @@ pub enum ColumnKind {
     Fixed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     pub kind: ColumnKind,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PlonkVar {
     ColumnQuery { column: Column, rotation: i32 },
     Challenge { index: usize, phase: usize },
@@ -686,6 +686,23 @@ impl<V: Var> Expr<V> {
     }
 }
 
+pub struct ExprDisplay<'a, V: Var, T>
+where
+    T: Fn(&mut fmt::Formatter<'_>, &V) -> fmt::Result,
+{
+    pub e: &'a Expr<V>,
+    pub var_fmt: T,
+}
+
+impl<'a, V: Var, T> Display for ExprDisplay<'a, V, T>
+where
+    T: Fn(&mut fmt::Formatter<'_>, &V) -> fmt::Result,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.e.fmt_ascii(f, &self.var_fmt)
+    }
+}
+
 impl<V: Var + Display> Display for Expr<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &V| {
@@ -705,12 +722,12 @@ impl<V: Var> Expr<V> {
         self.is_terminal() || matches!(self, Expr::Mul(_))
     }
 
-    pub fn fmt_ascii<W: Write, FV>(&self, f: &mut W, fmt_var: &mut FV) -> fmt::Result
+    pub fn fmt_ascii<W: Write, FV>(&self, f: &mut W, fmt_var: &FV) -> fmt::Result
     where
-        FV: FnMut(&mut W, &V) -> fmt::Result,
+        FV: Fn(&mut W, &V) -> fmt::Result,
     {
         use Expr::*;
-        let mut fmt_exp = |e: &Self, f: &mut W, parens: bool| -> fmt::Result {
+        let fmt_exp = |e: &Self, f: &mut W, parens: bool| -> fmt::Result {
             if parens {
                 write!(f, "(")?;
             }

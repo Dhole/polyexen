@@ -1,5 +1,6 @@
 use crate::expr::{self, Column, ColumnKind, Expr, PlonkVar as Var};
 use num_bigint::BigUint;
+use num_traits::Zero;
 use std::fmt::{self, Debug, Display, Write};
 
 pub mod backends;
@@ -177,22 +178,10 @@ pub struct VarDisplay<'a> {
 
 impl Display for VarDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ColumnKind::*;
         use Var::*;
         match self.v {
-            ColumnQuery {
-                column: Column { kind, index },
-                rotation,
-            } => {
-                write!(
-                    f,
-                    "{}",
-                    match kind {
-                        Witness => self.plaf.columns.witness[*index].name(),
-                        Public => self.plaf.columns.public[*index].name(),
-                        Fixed => self.plaf.columns.fixed[*index].name(),
-                    },
-                )?;
+            ColumnQuery { column, rotation } => {
+                self.plaf.fmt_column(f, column)?;
                 if *rotation != 0 {
                     write!(f, "[{}]", rotation)?;
                 }
@@ -201,6 +190,33 @@ impl Display for VarDisplay<'_> {
                 write!(f, "{}", self.plaf.info.challenges[*index].name())?
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Cell {
+    pub column: Column,
+    pub offset: usize,
+}
+
+impl expr::Var for Cell {}
+
+impl Display for Cell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+pub struct CellDisplay<'a> {
+    pub c: &'a Cell,
+    pub plaf: &'a Plaf,
+}
+
+impl Display for CellDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.plaf.fmt_column(f, &self.c.column)?;
+        write!(f, "[{}]", self.c.offset)?;
         Ok(())
     }
 }
@@ -238,6 +254,38 @@ impl Plaf {
             true
         } else {
             false
+        }
+    }
+
+    pub fn resolve(&self, e: &Expr<Var>, offset: usize) -> Expr<Cell> {
+        use Expr::*;
+        match e {
+            Neg(e) => Neg(Box::new(self.resolve(e, offset))),
+            Const(f) => Const(f.clone()),
+            Var(v) => match v {
+                expr::PlonkVar::ColumnQuery { column, rotation } => {
+                    let offset =
+                        (offset as i32 + rotation).rem_euclid(self.info.num_rows as i32) as usize;
+                    match column.kind {
+                        ColumnKind::Fixed => Const(
+                            self.fixed[column.index][offset]
+                                .clone()
+                                .unwrap_or_else(BigUint::zero),
+                        ),
+                        _ => Var(Cell {
+                            column: *column,
+                            offset,
+                        }),
+                    }
+                }
+                expr::PlonkVar::Challenge { index: _, phase: _ } => {
+                    // TODO: Figure out something better :P
+                    Const(BigUint::from(1234u64))
+                }
+            },
+            Sum(es) => Sum(es.iter().map(|e| self.resolve(e, offset)).collect()),
+            Mul(es) => Mul(es.iter().map(|e| self.resolve(e, offset)).collect()),
+            Pow(e, f) => Pow(Box::new(self.resolve(e, offset)), *f),
         }
     }
 }
