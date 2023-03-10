@@ -18,38 +18,29 @@ u16: range(0, 0xffff)
 
 # Rules
 
-
 BOOLY(e: expr) -> booly
-
 - if e(x) == 0 then False else True
 
 IF (b: booly) THEN e: expr
-
-- if b(x) is truthy then BOOLY(e(x))
-
+- if b(x) is truthy then BOOLY(e(x)) is false
 > e * p
 
 IF (e: bool) THEN e1: expr ELSE e2: expr
-
-- if e(x) is true then e1, else e2
-
-> e * p
-> (1 - e) * p
+- if e(x) is true then e1(x) == 0, else e2(x) == 0
+> e * e1
+> (1 - e) * e2
 
 e1: booly AND e2:booly -> booly
-
 > e1 * e2
 
 e1: bool AND e2:bool -> bool
-
 > e1 * e2
 
 e1: bool OR e2:bool -> bool
-
 > e1 + e2 - e1 * e2
+> [alt] 1 - ((1 - e1) * (1 - e2)) = 1 - (1 - e2 - e1 + e1 * e2) = e1 + e2 - e1 * e2 # DeMorgan
 
 e1: expr == q: const -> bool
-
 > (1 - (e1 - q) * w)
 % (e1 - q) * (1 - (e1 - q) * w)
 $ w := inv(e1 - q) if (e1 - q) != 0
@@ -61,10 +52,12 @@ not(e: expr in S) -> booly
 (e - s1) * (e - s2) * ... * (e - sn)
 
 CONSTRAIN(not(e: booly))
-
 - e(x) == false
-
 > e == 0
+
+# Polynomail constraint analysis
+
+
 
 # DSL design notes
 
