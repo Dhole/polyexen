@@ -6,6 +6,7 @@ use num_bigint::{BigInt, BigUint, RandBigInt, Sign};
 use num_integer::Integer;
 use num_traits::{One, ToPrimitive, Zero};
 use rand::Rng;
+use std::mem;
 use std::{
     cmp::{Eq, Ord, Ordering, PartialEq},
     collections::{HashMap, HashSet},
@@ -598,13 +599,19 @@ impl<V: Var> Expr<V> {
             _ => self,
         }
     }
-
-    pub fn simplify(self, p: &BigUint) -> Self {
+    pub fn simplify_move(self, p: &BigUint) -> Self {
         let ip = BigInt::from(p.clone());
         let e = self._simplify(p, &ip);
         let e = e.normalize_linear_comb();
         let e = e.normalize_pow();
         e
+    }
+
+    pub fn simplify(&mut self, p: &BigUint) -> &mut Self {
+        let e = mem::replace(self, Expr::Const(BigUint::zero()));
+        let e = e.simplify_move(p);
+        *self = e;
+        self
     }
 
     fn _normalize(self, p: &BigUint) -> Self {
@@ -614,11 +621,11 @@ impl<V: Var> Expr<V> {
         match self {
             Neg(e) => Mul(vec![Const(p_1), *e]),
             Sum(xs) => {
-                let xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.normalize(p)).collect();
+                let xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.normalize_move(p)).collect();
                 Sum(xs)
             }
             Mul(xs) => {
-                let mut xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.normalize(p)).collect();
+                let mut xs: Vec<Expr<V>> = xs.into_iter().map(|x| x.normalize_move(p)).collect();
                 xs.sort();
                 let mut iter = xs.into_iter();
                 let mul_acc = iter.next().unwrap();
@@ -645,8 +652,15 @@ impl<V: Var> Expr<V> {
         }
     }
 
-    pub fn normalize(self, p: &BigUint) -> Self {
-        self.simplify(p)._normalize(p).simplify(p)
+    pub fn normalize_move(self, p: &BigUint) -> Self {
+        self.simplify_move(p)._normalize(p).simplify_move(p)
+    }
+
+    pub fn normalize(&mut self, p: &BigUint) -> &mut Self {
+        let e = mem::replace(self, Expr::Const(BigUint::zero()));
+        let e = e.normalize_move(p);
+        *self = e;
+        self
     }
 
     fn _vars(&self, vars: &mut HashSet<V>) {
@@ -669,6 +683,7 @@ impl<V: Var> Expr<V> {
         vars
     }
 
+    // TODO: Document the probability of success
     pub fn test_eq<R: Rng>(&self, rng: &mut R, other: &Self) -> bool {
         let p = BigUint::parse_bytes(b"100000000000000000000000000000000", 16).unwrap()
             - BigUint::from(159u64);
@@ -683,6 +698,13 @@ impl<V: Var> Expr<V> {
         let e1_eval = self.eval(&p, &vars);
         let e2_eval = other.eval(&p, &vars);
         e1_eval == e2_eval
+    }
+
+    pub fn is_zero(&self) -> bool {
+        match self {
+            Self::Const(c) => c.is_zero(),
+            _ => false,
+        }
     }
 }
 
@@ -814,14 +836,14 @@ mod tests {
         println!("raw e: {:?}", e);
         println!("e: {}", e);
 
-        let e = e.clone().normalize(&p);
+        let e = e.clone().normalize_move(&p);
         println!("e.normalize: {}", e);
 
-        let e = e.simplify(&p);
+        let e = e.simplify_move(&p);
         println!("raw e.normalize: {:?}", e);
         println!("e.simplify: {}", e);
 
-        let e = e.normalize(&p);
+        let e = e.normalize_move(&p);
         println!("e.normalize: {}", e);
     }
 
@@ -863,7 +885,7 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(0);
         for i in 0..1024 {
             let e1 = Expr::rand(&mut rng, &p);
-            let e2 = e1.clone().simplify(&p);
+            let e2 = e1.clone().simplify_move(&p);
             let eval1 = e1.eval(&p, &vars);
             let eval2 = e2.eval(&p, &vars);
             if eval1 != eval2 {
@@ -888,7 +910,7 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(0);
         for _i in 0..1024 {
             let e1 = Expr::rand_depth(&mut rng, &p, 3);
-            let e2 = e1.clone().normalize(&p);
+            let e2 = e1.clone().normalize_move(&p);
             let eval1 = e1.eval(&p, &vars);
             let eval2 = e2.eval(&p, &vars);
             assert_eq!(eval1, eval2);
@@ -933,7 +955,7 @@ mod tests_with_parser {
         let e1_str = "112 + r_word*(164 + r_word*(133 + r_word*(93 + r_word*(4 + r_word*(216 + r_word*(250 + r_word*(123 + r_word*(59 + r_word*(39 + r_word*(130 + r_word*(202 + r_word*(83 + r_word*(182 + r_word*r_word*(229 + r_word*(192 + r_word*(3 + r_word*(199 + r_word*(220 + r_word*(178 + r_word*(125 + r_word*(126 + r_word*(146 + r_word*(60 + r_word*(35 + r_word*(247 + r_word*(134 + r_word*(1 + r_word*(70 + r_word*(210 + 197*r_word)))))))))))))))))))))))))))))";
         let e2_str = "112*r_word^0 + 164*r_word^1 + 133*r_word^2 + 93*r_word^3 + 4*r_word^4 + 216*r_word^5 + 250*r_word^6 + 123*r_word^7 + 59*r_word^8 + 39*r_word^9 + 130*r_word^10 + 202*r_word^11 + 83*r_word^12 + 182*r_word^13 + 0*r_word^14 + 229*r_word^15 + 192*r_word^16 + 3*r_word^17 + 199*r_word^18 + 220*r_word^19 + 178*r_word^20 + 125*r_word^21 + 126*r_word^22 + 146*r_word^23 + 60*r_word^24 + 35*r_word^25 + 247*r_word^26 + 134*r_word^27 + 1*r_word^28 + 70*r_word^29 + 210*r_word^30 + 197*r_word^31";
         let e1 = parse_expr(e1_str).unwrap();
-        let e2 = e1.simplify(&p);
+        let e2 = e1.simplify_move(&p);
         // println!("{:?}", e1.normalize_linear_comb());
         let s2 = format!("{}", e2);
         assert_eq!(s2, e2_str);
@@ -944,7 +966,7 @@ mod tests_with_parser {
         let p = prime();
         let e1_str = "1*BYTECODE_q_enable*(1 - 1*(1 - 1*(1 - tag)*(1 - tag[1]))*(1 - BYTECODE_q_last))*(code_hash - (((((((((((((((((((((((((((((((197*r_word + 210)*r_word + 70)*r_word + 1)*r_word + 134)*r_word + 247)*r_word + 35)*r_word + 60)*r_word + 146)*r_word + 126)*r_word + 125)*r_word + 178)*r_word + 220)*r_word + 199)*r_word + 3)*r_word + 192)*r_word + 229)*r_word + 0)*r_word + 182)*r_word + 83)*r_word + 202)*r_word + 130)*r_word + 39)*r_word + 59)*r_word + 123)*r_word + 250)*r_word + 216)*r_word + 4)*r_word + 93)*r_word + 133)*r_word + 164)*r_word + 112))";
         let e1 = parse_expr(e1_str).unwrap();
-        let e2 = e1.clone().simplify(&p);
+        let e2 = e1.clone().simplify_move(&p);
         println!("{}", e2);
 
         let vars: HashMap<String, BigUint> = {
@@ -969,7 +991,7 @@ mod tests_with_parser {
         // TODO: Debug parser with this
         // let e1_str ="f05*w77*w78*w79*w80*(1 - w76)*(w26 - (w26[-1]*2^0 + w25[-1]*2^1 + w24[-1]*2^2 + w23[-1]*2^3) + 2*(w25*2^0 + w24*2^1 + w23*2^2) + r_word*(w28 - w28[-1]) + r_word*r_word*(w27 - w27[-1]) + r_word*r_word*r_word*(w38 - w38[-1]) + r_word*r_word*r_word*r_word*(w37 - w37[-1]) + r_word*r_word*r_word*r_word*r_word*(w36 - w36[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*(w35 - w35[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w34 - w34[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w33 - w33[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w32 - w32[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w31 - w31[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w30 - w30[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w29 - w29[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w05 - w05[-1]) + r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*r_word*(w69 - (w69[-1] + 2^8*w70[-1]) + 2^8*w70))";
         let e1 = parse_expr(e1_str).unwrap();
-        let e2 = e1.simplify(&p);
+        let e2 = e1.simplify_move(&p);
         // println!("{:?}", e1.normalize_linear_comb());
         let s2 = format!("{}", e2);
         assert_eq!(s2, e2_str);

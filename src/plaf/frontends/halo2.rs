@@ -446,6 +446,7 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         }));
     let mut plaf = Plaf::default();
     let p = get_field_p::<F>();
+    plaf.info.p = p;
 
     plaf.info.num_rows = 2usize.pow(k);
     let challenge_phase = cs.challenge_phase();
@@ -490,8 +491,7 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         let len_log10 = (gate.polynomials().len() as f64).log10().ceil() as usize;
         for (i, poly) in gate.polynomials().iter().enumerate() {
             let exp = Expr::<Var>::from(poly);
-            // FIXME: There's a bug in simplify, tested with bytecode circuit
-            let exp = exp.simplify(&p);
+            // let exp = exp.simplify(&p);
             if matches!(exp, Expr::Const(_)) {
                 // Skip constant expressions (which should be `p(x) = 0`)
                 continue;
@@ -506,14 +506,8 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         let name = lookup.name();
         let lhs = lookup.input_expressions();
         let rhs = lookup.table_expressions();
-        let lhs = lhs
-            .iter()
-            .map(|e| Expr::<Var>::from(e).simplify(&p))
-            .collect();
-        let rhs = rhs
-            .iter()
-            .map(|e| Expr::<Var>::from(e).simplify(&p))
-            .collect();
+        let lhs = lhs.iter().map(|e| Expr::<Var>::from(e)).collect();
+        let rhs = rhs.iter().map(|e| Expr::<Var>::from(e)).collect();
         plaf.lookups.push(Lookup {
             name: name.to_string(),
             exps: (lhs, rhs),

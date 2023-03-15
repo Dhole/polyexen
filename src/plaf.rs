@@ -131,43 +131,62 @@ impl Challenge {
 
 #[derive(Debug, Default, Clone)]
 pub struct Columns {
+    /// List of witness columns.  These are called "advice" in halo2.
     pub witness: Vec<ColumnWitness>,
+    /// List of fixed columns.
     pub fixed: Vec<ColumnFixed>,
+    /// List of public columns.  These are called "instance" in halo2.
     pub public: Vec<ColumnPublic>,
 }
 
+/// Polynomial constraint
 #[derive(Debug, Clone)]
 pub struct Poly {
     pub name: String,
     pub exp: Expr<Var>,
 }
 
+/// Lookup constraint
 #[derive(Debug, Clone)]
 pub struct Lookup {
     pub name: String,
     pub exps: (Vec<Expr<Var>>, Vec<Expr<Var>>),
 }
 
+/// Copy Constraint
 #[derive(Debug, Clone)]
 pub struct CopyC {
     pub columns: (expr::Column, expr::Column),
     pub offsets: Vec<(usize, usize)>,
 }
 
+/// Circuit general information
 #[derive(Debug, Default, Clone)]
 pub struct Info {
+    /// Field modulus
+    pub p: BigUint,
+    /// Number of rows.  This is always a power of 2 in halo2.
     pub num_rows: usize,
+    /// List of challenges used.  The challange API is a proving system extension applied to pse's
+    /// fork of halo2: https://github.com/privacy-scaling-explorations/halo2/pull/97
     pub challenges: Vec<Challenge>,
 }
 
 /// Plonkish Arithmetization Format
 #[derive(Debug, Default, Clone)]
 pub struct Plaf {
+    /// Circuit general information
     pub info: Info,
+    /// Column information
     pub columns: Columns,
+    /// List of polynomial identity constraints
     pub polys: Vec<Poly>,
+    /// List of lookup constraints
     pub lookups: Vec<Lookup>,
+    /// List of copy constraints
     pub copys: Vec<CopyC>,
+    /// Assignment values to the fixed columns.  None is used for non-assigned values, which means
+    /// a 0 value.
     pub fixed: Vec<Vec<Option<BigUint>>>,
 }
 
@@ -286,6 +305,22 @@ impl Plaf {
             Sum(es) => Sum(es.iter().map(|e| self.resolve(e, offset)).collect()),
             Mul(es) => Mul(es.iter().map(|e| self.resolve(e, offset)).collect()),
             Pow(e, f) => Pow(Box::new(self.resolve(e, offset)), *f),
+        }
+    }
+
+    /// Simplify expressions in polynomial constraints and lookups.
+    pub fn simplify(&mut self) {
+        let p = &self.info.p;
+        // Polynomial Expressions
+        for poly in self.polys.iter_mut() {
+            poly.exp.simplify(p);
+        }
+        // Lookups
+        for lookup in self.lookups.iter_mut() {
+            for (lhs, rhs) in lookup.exps.0.iter_mut().zip(lookup.exps.1.iter_mut()) {
+                lhs.simplify(p);
+                rhs.simplify(p);
+            }
         }
     }
 }

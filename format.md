@@ -1,5 +1,7 @@
 # plaf: Plonkish Arithmetization Format
 
+Original notes for Plaf.  The current implementation is slightly different.
+
 ```
 [info]
 name = "Circuit Foo"
