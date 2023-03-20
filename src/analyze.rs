@@ -1,4 +1,5 @@
-use crate::expr::{Expr, Var};
+use crate::expr::{modinv, mul, neg, Expr, Var};
+use std::fmt::{self, Display};
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{cast::ToPrimitive, One, Zero};
@@ -8,6 +9,15 @@ use std::collections::{hash_map::RandomState, HashMap, HashSet};
 pub enum Bound {
     Range(BigUint, BigUint), // x in [start..end]
     Set(Vec<BigUint>),       // non contiguous set, always sorted
+}
+
+impl Display for Bound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Bound::Range(start, end) => write!(f, "[{},{}]", start, end),
+            Bound::Set(xs) => write!(f, "{:?}", xs),
+        }
+    }
 }
 
 impl Bound {
@@ -100,6 +110,18 @@ impl Bound {
             false
         }
     }
+    pub fn unique(&self) -> Option<&BigUint> {
+        match self {
+            Bound::Set(xs) => {
+                if xs.len() == 1 {
+                    Some(&xs[0])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -134,7 +156,7 @@ pub fn bound_base(p: &BigUint) -> Bound {
 }
 
 pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysis<V>) {
-    let (exhaustive, solutions_list) = find_solutions(e);
+    let (exhaustive, solutions_list) = find_solutions(e, p);
     let mut solutions = HashMap::new();
     if exhaustive {
         for (var, value) in &solutions_list {
@@ -170,6 +192,10 @@ fn find_solutions_base<V: Var>(e: &Expr<V>) -> (bool, Vec<(V, BigInt)>) {
         Var(v) => (true, vec![(v.clone(), BigInt::zero())]),
         Neg(e) => find_solutions_base(e),
         Sum(es) => {
+            // println!("DBG1");
+            // for e in es {
+            //     println!("  {}", e);
+            // }
             let mut var: Option<V> = None;
             let mut con: Option<BigInt> = None;
             let mut neg = false;
@@ -204,10 +230,51 @@ fn find_solutions_base<V: Var>(e: &Expr<V>) -> (bool, Vec<(V, BigInt)>) {
     }
 }
 
+fn solve_1(a: &BigUint, b: &BigUint, p: &BigUint) -> BigUint {
+    // a + b*x = 0
+    // x = -a * inv(b)
+    mul(neg(a.clone(), p), &modinv(b.clone(), p), p)
+}
+
+pub fn find_solution_1<V: Var>(e: &Expr<V>, p: &BigUint) -> Option<(V, BigInt)> {
+    use Expr::*;
+    match e {
+        Mul(xs) => {
+            if xs.len() != 2 {
+                return None;
+            }
+            if let (Const(b), Var(v)) = (&xs[0], &xs[1]) {
+                let res = solve_1(&BigUint::zero(), &b, p);
+                return Some((v.clone(), BigInt::from(res)));
+            }
+            return None;
+        }
+        Sum(xs) => {
+            if xs.len() != 2 {
+                return None;
+            }
+            if let (Const(a), Mul(ys)) = (&xs[0], &xs[1]) {
+                if ys.len() != 2 {
+                    return None;
+                }
+                if let (Const(b), Var(v)) = (&ys[0], &ys[1]) {
+                    let res = solve_1(&a, &b, p);
+                    return Some((v.clone(), BigInt::from(res)));
+                }
+            }
+            return None;
+        }
+        _ => None,
+    }
+}
+
 // Attempt to find solutions to `e(X) == 0` by matching on the pattern `(x - A)(y - B)...`.
 // Returns true when the solutions returned are exhaustive.
-pub fn find_solutions<V: Var>(e: &Expr<V>) -> (bool, Vec<(V, BigInt)>) {
+pub fn find_solutions<V: Var>(e: &Expr<V>, p: &BigUint) -> (bool, Vec<(V, BigInt)>) {
     use Expr::*;
+    if let Some(solution) = find_solution_1(e, p) {
+        return (true, vec![solution]);
+    }
     match e {
         Mul(es) => {
             let mut exhaustive = true;
@@ -235,7 +302,8 @@ mod tests_with_parser {
     }
 
     #[test]
-    fn test_find_solutions() {
+    fn test_find_solutions00() {
+        let p = prime();
         for (e_str, sol_str, expected_exhaustive) in [
             ("(a - 5) * (b + 8)", vec![("a", "5"), ("b", "-8")], true),
             ("(a - 5) * (a - 7)", vec![("a", "5"), ("a", "7")], true),
@@ -257,7 +325,7 @@ mod tests_with_parser {
             }
             expected_solutions.sort();
 
-            let (exhaustive, mut solutions) = find_solutions(&e);
+            let (exhaustive, mut solutions) = find_solutions(&e, &p);
             solutions.sort();
             assert_eq!(exhaustive, expected_exhaustive, "{}", e_str);
             assert_eq!(solutions, expected_solutions, "{}", e_str);
@@ -265,7 +333,7 @@ mod tests_with_parser {
     }
 
     #[test]
-    fn test_find_bounds_poly() {
+    fn test_find_bounds_poly00() {
         let p = prime();
 
         let poly1 = parse_expr("(a - 0) * (a - 1)").unwrap();
@@ -289,6 +357,15 @@ mod tests_with_parser {
     fn test_carlos() {
         let p = prime();
         let poly1 = parse_expr("(x - 4) * (x - 1) * x * (x - 2) * (x - 3)").unwrap();
+        let mut analysis = Analysis::new();
+        find_bounds_poly(&poly1, &p, &mut analysis);
+        println!("{:?}", &analysis);
+    }
+
+    #[test]
+    fn test_find_bounds_poly01() {
+        let p = prime();
+        let poly1 = parse_expr("5*(1 - tag[1])").unwrap();
         let mut analysis = Analysis::new();
         find_bounds_poly(&poly1, &p, &mut analysis);
         println!("{:?}", &analysis);

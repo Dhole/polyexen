@@ -379,20 +379,15 @@ pub fn gen_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
         cs.constants().clone(),
     )?;
 
-    let mut witness = Witness {
-        num_rows: n,
-        columns: plaf.columns.witness.clone(),
-        witness: vec![vec![]; plaf.columns.witness.len()],
-    };
+    let mut witness = plaf.gen_empty_witness();
 
     for i in 0..plaf.columns.witness.len() {
-        let mut column = vec![None; n];
+        let column = &mut witness.witness[i];
         for (j, cell) in assembly.advice[i].iter().enumerate() {
             if let CellValue::Assigned(v) = cell {
                 column[j] = Some(BigUint::from_bytes_le(&v.to_repr()[..]));
             }
         }
-        witness.witness[i] = column;
     }
 
     Ok(witness)

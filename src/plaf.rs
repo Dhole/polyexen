@@ -1,6 +1,7 @@
 use crate::expr::{self, Column, ColumnKind, Expr, PlonkVar as Var};
 use num_bigint::BigUint;
 use num_traits::Zero;
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Write};
 
 pub mod backends;
@@ -22,7 +23,7 @@ pub struct Witness {
     num_rows: usize,
     columns: Vec<ColumnWitness>,
     // The advice cells in the circuit, arranged as [column][row].
-    witness: Vec<Vec<Option<BigUint>>>,
+    pub witness: Vec<Vec<Option<BigUint>>>,
 }
 
 /// Adaptor struct to format the witness columns assignments as CSV
@@ -68,7 +69,7 @@ impl ColumnWitness {
             phase,
         }
     }
-    fn name(&self) -> &String {
+    pub fn name(&self) -> &String {
         self.aliases.get(0).unwrap_or(&self.name)
     }
 }
@@ -86,7 +87,7 @@ impl ColumnFixed {
             aliases: Vec::new(),
         }
     }
-    fn name(&self) -> &String {
+    pub fn name(&self) -> &String {
         self.aliases.get(0).unwrap_or(&self.name)
     }
 }
@@ -104,7 +105,7 @@ impl ColumnPublic {
             aliases: Vec::new(),
         }
     }
-    fn name(&self) -> &String {
+    pub fn name(&self) -> &String {
         self.aliases.get(0).unwrap_or(&self.name)
     }
 }
@@ -139,7 +140,7 @@ pub struct Columns {
     pub public: Vec<ColumnPublic>,
 }
 
-/// Polynomial constraint
+/// Polynomial identity constraint
 #[derive(Debug, Clone)]
 pub struct Poly {
     pub name: String,
@@ -163,7 +164,7 @@ pub struct CopyC {
 /// Circuit general information
 #[derive(Debug, Default, Clone)]
 pub struct Info {
-    /// Field modulus
+    /// Field modulus / Size of the field
     pub p: BigUint,
     /// Number of rows.  This is always a power of 2 in halo2.
     pub num_rows: usize,
@@ -276,38 +277,6 @@ impl Plaf {
         }
     }
 
-    pub fn resolve(&self, e: &Expr<Var>, offset: usize) -> Expr<Cell> {
-        use Expr::*;
-        match e {
-            Neg(e) => Neg(Box::new(self.resolve(e, offset))),
-            Const(f) => Const(f.clone()),
-            Var(v) => match v {
-                expr::PlonkVar::ColumnQuery { column, rotation } => {
-                    let offset =
-                        (offset as i32 + rotation).rem_euclid(self.info.num_rows as i32) as usize;
-                    match column.kind {
-                        ColumnKind::Fixed => Const(
-                            self.fixed[column.index][offset]
-                                .clone()
-                                .unwrap_or_else(BigUint::zero),
-                        ),
-                        _ => Var(Cell {
-                            column: *column,
-                            offset,
-                        }),
-                    }
-                }
-                expr::PlonkVar::Challenge { index: _, phase: _ } => {
-                    // TODO: Figure out something better :P
-                    Const(BigUint::from(1234u64))
-                }
-            },
-            Sum(es) => Sum(es.iter().map(|e| self.resolve(e, offset)).collect()),
-            Mul(es) => Mul(es.iter().map(|e| self.resolve(e, offset)).collect()),
-            Pow(e, f) => Pow(Box::new(self.resolve(e, offset)), *f),
-        }
-    }
-
     /// Simplify expressions in polynomial constraints and lookups.
     pub fn simplify(&mut self) {
         let p = &self.info.p;
@@ -323,7 +292,158 @@ impl Plaf {
             }
         }
     }
+
+    pub fn alias_map(&self) -> AliasMap {
+        let mut map = HashMap::new();
+        for (index, challenge) in self.info.challenges.iter().enumerate() {
+            let var = Var::Challenge {
+                index,
+                phase: challenge.phase,
+            };
+            map.insert(challenge.name.clone(), var.clone());
+            if let Some(alias) = &challenge.alias {
+                map.insert(alias.clone(), var.clone());
+            }
+        }
+        for (index, column) in self.columns.witness.iter().enumerate() {
+            let var = Var::ColumnQuery {
+                column: Column {
+                    kind: ColumnKind::Witness,
+                    index,
+                },
+                rotation: 0,
+            };
+            map.insert(column.name.clone(), var.clone());
+            for alias in &column.aliases {
+                map.insert(alias.clone(), var.clone());
+            }
+        }
+        for (index, column) in self.columns.fixed.iter().enumerate() {
+            let var = Var::ColumnQuery {
+                column: Column {
+                    kind: ColumnKind::Fixed,
+                    index,
+                },
+                rotation: 0,
+            };
+            map.insert(column.name.clone(), var.clone());
+            for alias in &column.aliases {
+                map.insert(alias.clone(), var.clone());
+            }
+        }
+        for (index, column) in self.columns.public.iter().enumerate() {
+            let var = Var::ColumnQuery {
+                column: Column {
+                    kind: ColumnKind::Public,
+                    index,
+                },
+                rotation: 0,
+            };
+            map.insert(column.name.clone(), var.clone());
+            for alias in &column.aliases {
+                map.insert(alias.clone(), var.clone());
+            }
+        }
+        AliasMap(map)
+    }
+
+    pub fn gen_empty_witness(&self) -> Witness {
+        let mut witness = Vec::with_capacity(self.columns.witness.len());
+        for i in 0..self.columns.witness.len() {
+            witness.push(vec![None; self.info.num_rows]);
+        }
+        Witness {
+            num_rows: self.info.num_rows,
+            columns: self.columns.witness.clone(),
+            witness,
+        }
+    }
+
+    pub fn eval_partial<F, V>(&self, e: &Expr<V>, eval_var: &F, offset: usize) -> Expr<Cell>
+    where
+        V: expr::Var,
+        F: Fn(&V, usize) -> Expr<Cell>,
+    {
+        use Expr::*;
+        match e {
+            Neg(e) => Neg(Box::new(self.eval_partial(e, eval_var, offset))),
+            Const(f) => Const(f.clone()),
+            Var(v) => eval_var(v, offset),
+            Sum(es) => Sum(es
+                .iter()
+                .map(|e| self.eval_partial(e, eval_var, offset))
+                .collect()),
+            Mul(es) => Mul(es
+                .iter()
+                .map(|e| self.eval_partial(e, eval_var, offset))
+                .collect()),
+            Pow(e, f) => Pow(Box::new(self.eval_partial(e, eval_var, offset)), *f),
+        }
+    }
+
+    pub fn resolve(&self, e: &Expr<Var>, offset: usize) -> Expr<Cell> {
+        self.eval_partial(
+            e,
+            &|v: &Var, offset: usize| -> Expr<Cell> {
+                match v {
+                    expr::PlonkVar::ColumnQuery { column, rotation } => {
+                        let offset = (offset as i32 + rotation)
+                            .rem_euclid(self.info.num_rows as i32)
+                            as usize;
+                        match column.kind {
+                            ColumnKind::Fixed => Expr::Const(
+                                self.fixed[column.index][offset]
+                                    .clone()
+                                    .unwrap_or_else(BigUint::zero),
+                            ),
+                            _ => Expr::Var(Cell {
+                                column: *column,
+                                offset,
+                            }),
+                        }
+                    }
+                    expr::PlonkVar::Challenge { index: _, phase: _ } => {
+                        // TODO: Figure out something better :P
+                        Expr::Const(BigUint::from(1234u64))
+                    }
+                }
+            },
+            offset,
+        )
+    }
+
+    pub fn _eval_partial(&self, e: &Expr<Cell>, witness: &Witness, offset: usize) -> Expr<Cell> {
+        use Expr::*;
+        match e {
+            Neg(e) => Neg(Box::new(self._eval_partial(e, witness, offset))),
+            Const(f) => Const(f.clone()),
+            Var(v) => {
+                let Cell { column, offset } = v;
+                match column.kind {
+                    ColumnKind::Witness => {
+                        if let Some(f) = &witness.witness[column.index][*offset] {
+                            Const(f.clone())
+                        } else {
+                            e.clone()
+                        }
+                    }
+                    _ => e.clone(),
+                }
+            }
+            Sum(es) => Sum(es
+                .iter()
+                .map(|e| self._eval_partial(e, witness, offset))
+                .collect()),
+            Mul(es) => Mul(es
+                .iter()
+                .map(|e| self._eval_partial(e, witness, offset))
+                .collect()),
+            Pow(e, f) => Pow(Box::new(self._eval_partial(e, witness, offset)), *f),
+        }
+    }
 }
+
+pub struct AliasMap(pub HashMap<String, Var>);
 
 /// Adaptor struct to format the fixed columns assignments as CSV
 pub struct PlafDisplayFixedCSV<'a>(pub &'a Plaf);
@@ -361,6 +481,7 @@ impl Display for PlafDisplayBaseTOML<'_> {
         let this = self.0;
         writeln!(f, "[info]")?;
         writeln!(f, "num_rows = {}", this.info.num_rows)?;
+        writeln!(f, "p = {}", this.info.p)?;
         writeln!(f)?;
 
         writeln!(f, "[info.challenges]")?;
