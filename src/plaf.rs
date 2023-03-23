@@ -214,7 +214,7 @@ impl Display for VarDisplay<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Cell {
     pub column: Column,
     pub offset: usize,
@@ -224,7 +224,24 @@ impl expr::Var for Cell {}
 
 impl Display for Cell {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        use ColumnKind::*;
+        write!(
+            f,
+            "{}{:02}",
+            match self.column.kind {
+                Witness => "w",
+                Public => "p",
+                Fixed => "f",
+            },
+            self.column.index
+        )?;
+        write!(f, "[{}]", self.offset)
+    }
+}
+
+impl Debug for Cell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -349,7 +366,7 @@ impl Plaf {
 
     pub fn gen_empty_witness(&self) -> Witness {
         let mut witness = Vec::with_capacity(self.columns.witness.len());
-        for i in 0..self.columns.witness.len() {
+        for _i in 0..self.columns.witness.len() {
             witness.push(vec![None; self.info.num_rows]);
         }
         Witness {

@@ -52,8 +52,10 @@ impl Bound {
         Self::Range(min, max)
     }
 
-    pub fn intersection(&mut self, other: &Self) {
+    /// Returns true if self changes.
+    pub fn intersection(&mut self, other: &Self) -> bool {
         use Bound::*;
+        let self_old = self.clone();
         match (&self, other) {
             (Range(a, b), Range(c, d)) => {
                 let a: &BigUint = a;
@@ -76,6 +78,11 @@ impl Bound {
                 *self = Self::new(s.iter().filter(|v| &min <= v && v <= &max).cloned());
             }
         }
+        let changed = self_old != *self;
+        // if changed {
+        //     println!("DBG {} -> {}", self_old, self);
+        // }
+        changed
     }
 
     pub fn range_u64(&self) -> Option<(u64, u64)> {
@@ -155,7 +162,9 @@ pub fn bound_base(p: &BigUint) -> Bound {
     Bound::new_range(BigUint::zero(), p.clone() - BigUint::one())
 }
 
-pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysis<V>) {
+/// Try to find bounds on variables in the expression by finding values that will not satisfy the
+/// polynomial identity.  Returns the list of variables with updated bounds.
+pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysis<V>) -> Vec<V> {
     let (exhaustive, solutions_list) = find_solutions(e, p);
     let mut solutions = HashMap::new();
     if exhaustive {
@@ -172,6 +181,10 @@ pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysi
         solutions = HashMap::new();
     }
     let bound_base = bound_base(p);
+    let mut update = Vec::new();
+    // if analysis.vars_attrs.len() == 0 {
+    //     println!("DBG1");
+    // }
     for var in e.vars().iter() {
         let bound = match solutions.get(var) {
             Some(values) => Bound::new(values.into_iter().map(|c| to_biguint(c.clone(), p))),
@@ -180,9 +193,18 @@ pub fn find_bounds_poly<V: Var>(e: &Expr<V>, p: &BigUint, analysis: &mut Analysi
         analysis
             .vars_attrs
             .entry(var.clone())
-            .and_modify(|attrs| attrs.bound.intersection(&bound))
-            .or_insert(Attrs { bound });
+            .and_modify(|attrs| {
+                let changed = attrs.bound.intersection(&bound);
+                if changed {
+                    update.push(var.clone());
+                }
+            })
+            .or_insert_with(|| {
+                update.push(var.clone());
+                Attrs { bound }
+            });
     }
+    update
 }
 
 fn find_solutions_base<V: Var>(e: &Expr<V>) -> (bool, Vec<(V, BigInt)>) {
