@@ -6,12 +6,12 @@ use num_bigint::{BigInt, BigUint, RandBigInt, Sign};
 use num_integer::Integer;
 use num_traits::{One, ToPrimitive, Zero};
 use rand::Rng;
-use std::mem;
 use std::{
     cmp::{Eq, Ord, Ordering, PartialEq},
     collections::{HashMap, HashSet},
     fmt::{self, Debug, Display, Write},
     hash::Hash,
+    mem,
     ops::{Add, Mul, Neg, Sub},
 };
 

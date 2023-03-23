@@ -187,6 +187,21 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
         for _column in &self.plaf.columns.public {
             instance_columns.push(meta.instance_column());
         }
+
+        let to_column_any = |col: &expr::Column| -> Column<Any> {
+            match col.kind {
+                ColumnKind::Witness => advice_columns[col.index].into(),
+                ColumnKind::Public => instance_columns[col.index].into(),
+                ColumnKind::Fixed => fixed_columns[col.index].into(),
+            }
+        };
+
+        // Enable equality for copy constrains
+        for copy in &self.plaf.copys {
+            meta.enable_equality(to_column_any(&copy.columns.0));
+            meta.enable_equality(to_column_any(&copy.columns.1));
+        }
+
         // let mut challenges = Vec::new();
         // for challenge in &self.plaf.info.challenges {
         //     challenges.push(match challenge.phase {
@@ -284,6 +299,10 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                 // Set copy constraints
                 for copy in &self.plaf.copys {
                     let (left_col, right_col) = &copy.columns;
+
+                    if left_col.kind == ColumnKind::Public || right_col.kind == ColumnKind::Public {
+                        continue;
+                    }
                     let left_col = to_column_any(left_col);
                     let right_col = to_column_any(right_col);
                     for (left_offset, right_offset) in &copy.offsets {
@@ -310,6 +329,37 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
             },
         )?;
 
+        // Set public inputs
+        for copy in &self.plaf.copys {
+            let (left_col, right_col) = &copy.columns;
+
+            let (witness_col, public_col, offsets) = match (left_col.kind, right_col.kind) {
+                (ColumnKind::Witness, ColumnKind::Public) => {
+                    (left_col, right_col, copy.offsets.clone())
+                }
+                (ColumnKind::Public, ColumnKind::Witness) => (
+                    right_col,
+                    left_col,
+                    copy.offsets.iter().map(|(l, r)| (*r, *l)).collect(),
+                ),
+                (ColumnKind::Public, ColumnKind::Public) => {
+                    panic!("Cannot copy from public to public")
+                }
+                _ => continue,
+            };
+            for (witness_offset, public_offset) in offsets {
+                let cell = new_cell(
+                    (*config.columns.advice.get(witness_col.index).unwrap()).into(),
+                    witness_offset,
+                );
+
+                layouter.constrain_instance(
+                    cell,
+                    *config.columns.instance.get(public_col.index).unwrap(),
+                    public_offset,
+                )?;
+            }
+        }
         Ok(())
     }
 }
