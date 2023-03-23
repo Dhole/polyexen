@@ -19,10 +19,10 @@ enum CellValue<F> {
 
 #[derive(Debug)]
 pub struct Witness {
-    num_rows: usize,
-    columns: Vec<ColumnWitness>,
+    pub num_rows: usize,
+    pub columns: Vec<ColumnWitness>,
     // The advice cells in the circuit, arranged as [column][row].
-    witness: Vec<Vec<Option<BigUint>>>,
+    pub witness: Vec<Vec<Option<BigUint>>>,
 }
 
 /// Adaptor struct to format the witness columns assignments as CSV
@@ -61,7 +61,7 @@ pub struct ColumnWitness {
 }
 
 impl ColumnWitness {
-    fn new(name: String, phase: usize) -> Self {
+    pub fn new(name: String, phase: usize) -> Self {
         Self {
             name,
             aliases: Vec::new(),
@@ -80,7 +80,7 @@ pub struct ColumnFixed {
 }
 
 impl ColumnFixed {
-    fn new(name: String) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             name,
             aliases: Vec::new(),
@@ -98,7 +98,7 @@ pub struct ColumnPublic {
 }
 
 impl ColumnPublic {
-    fn new(name: String) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             name,
             aliases: Vec::new(),
