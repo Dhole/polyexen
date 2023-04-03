@@ -14,8 +14,13 @@ pub enum Bound {
 impl Display for Bound {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Bound::Range(start, end) => write!(f, "[{},{}]", start, end),
-            Bound::Set(xs) => write!(f, "{:?}", xs),
+            Bound::Range(start, end) => write!(f, "[{}:{}]", start, end),
+            // Bound::Set(xs) => write!(f, "{:?}", xs),
+            Bound::Set(xs) => {
+                let mut s = format!("{:?}", xs);
+                s.truncate(10);
+                write!(f, "{}", s)
+            }
         }
     }
 }
@@ -25,6 +30,7 @@ impl Bound {
         let one = BigUint::from(1u64);
         let mut set: Vec<BigUint> = iter.into_iter().collect();
         set.sort();
+        set.dedup();
         if set.len() == 0 {
             return Self::Set(vec![]);
         } else if set.len() == 1 {
@@ -39,6 +45,12 @@ impl Bound {
         }
         Self::Range(set[0].clone(), set[set.len() - 1].clone())
     }
+    pub fn new_unique(f: BigUint) -> Self {
+        Self::Set(vec![f])
+    }
+    pub fn empty() -> Self {
+        Self::Set(vec![])
+    }
     pub fn new_bool() -> Self {
         Self::Range(BigUint::from(0u64), BigUint::from(1u64))
     }
@@ -50,6 +62,35 @@ impl Bound {
     }
     pub fn new_range(min: BigUint, max: BigUint) -> Self {
         Self::Range(min, max)
+    }
+
+    pub fn overlap(&self, other: &Self) -> bool {
+        use Bound::*;
+        if let (Some(a), Some(b)) = (self.unique(), other.unique()) {
+            return a == b;
+        }
+        match (&self, other) {
+            (Range(a, b), Range(c, d)) => {
+                let a: &BigUint = a;
+                let b: &BigUint = b;
+                let min = a.max(c);
+                let max = b.min(d);
+                if min <= max {
+                    true
+                } else {
+                    false
+                }
+            }
+            (Set(a), Set(b)) => {
+                let a: HashSet<&BigUint, RandomState> = HashSet::from_iter(a.iter());
+                let b: HashSet<&BigUint, RandomState> = HashSet::from_iter(b.iter());
+                let intersection = a.intersection(&b);
+                intersection.count() != 0
+            }
+            (Range(min, max), Set(s)) | (Set(s), Range(min, max)) => {
+                s.iter().filter(|v| &min <= v && v <= &max).count() != 0
+            }
+        }
     }
 
     /// Returns true if self changes.
@@ -89,6 +130,17 @@ impl Bound {
         if let Self::Range(start, end) = self {
             if let (Some(start), Some(end)) = (start.to_u64(), end.to_u64()) {
                 Some((start, end))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn range_bits(&self) -> Option<u64> {
+        if let Self::Range(start, end) = self {
+            if start.is_zero() && end.count_ones() == end.bits() {
+                Some(end.bits())
             } else {
                 None
             }
@@ -141,10 +193,22 @@ pub struct Analysis<V> {
     pub vars_attrs: HashMap<V, Attrs>,
 }
 
-impl<V> Analysis<V> {
+impl<V: Var> Analysis<V> {
     pub fn new() -> Self {
         Self {
             vars_attrs: HashMap::new(),
+        }
+    }
+
+    pub fn bound_exp(&self, e: &Expr<V>) -> Option<Bound> {
+        use Expr::*;
+        match e {
+            Var(cell) => self.vars_attrs.get(cell).map(|attrs| attrs.bound.clone()),
+            Const(f) => Some(Bound::new([f.clone()])),
+            _ => {
+                // TODO: Implement
+                None
+            }
         }
     }
 }
@@ -160,6 +224,83 @@ fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
 
 pub fn bound_base(p: &BigUint) -> Bound {
     Bound::new_range(BigUint::zero(), p.clone() - BigUint::one())
+}
+
+/// Try to find solutions on variables in the expression that follow a linear combination with bit-ranged variables.  Returns the list of variables with updated bounds.
+/// This works by fiding the pattern `0xabc - (x + B * y + B^2 * z + ...)` where `x,y,z` are ranged
+/// from 0 to B-1.
+pub fn solve_ranged_linear_comb<V: Var>(
+    e: &Expr<V>,
+    p: &BigUint,
+    analysis: &mut Analysis<V>,
+) -> Vec<V> {
+    use Expr::*;
+    let empty = Vec::new();
+    let xs = if let Sum(xs) = e {
+        xs
+    } else {
+        return empty;
+    };
+    if xs.len() != 2 {
+        return empty;
+    }
+    let mut value = if let Const(f) = &xs[0] {
+        f.clone()
+    } else {
+        return empty;
+    };
+    let exp = if let Neg(e) = &xs[1] {
+        e
+    } else {
+        return empty;
+    };
+    let (base, elems) = if let Some((base, elems)) = exp.get_linear_comb(p) {
+        (base, elems)
+    } else {
+        return empty;
+    };
+    let base = if let Const(f) = base {
+        f
+    } else {
+        return empty;
+    };
+    let base_bits = if base.count_ones() == 1 {
+        base.bits() - 1
+    } else {
+        return empty;
+    };
+    let vars: Vec<&V> = elems
+        .iter()
+        .filter_map(|elem| if let Var(v) = elem { Some(v) } else { None })
+        .collect();
+    if vars.len() != elems.len() {
+        return empty;
+    }
+    for v in &vars {
+        if let Some(attrs) = analysis.vars_attrs.get(&v) {
+            if let Some(range_bits) = attrs.bound.range_bits() {
+                if range_bits > base_bits {
+                    return empty;
+                }
+            } else {
+                return empty;
+            }
+        } else {
+            return empty;
+        }
+    }
+    let mask = base - BigUint::one();
+    for v in &vars {
+        analysis.vars_attrs.insert(
+            (*v).clone(),
+            Attrs {
+                bound: Bound::new_unique(value.clone() & mask.clone()),
+            },
+        );
+        value = value >> base_bits;
+    }
+    assert!(value.is_zero());
+    vars.iter().cloned().cloned().collect()
 }
 
 /// Try to find bounds on variables in the expression by finding values that will not satisfy the

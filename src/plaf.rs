@@ -1,4 +1,4 @@
-use crate::expr::{self, Column, ColumnKind, Expr, PlonkVar as Var};
+use crate::expr::{self, Column, ColumnKind, ColumnQuery, Expr, PlonkVar as Var};
 use num_bigint::BigUint;
 use num_traits::Zero;
 use std::collections::HashMap;
@@ -144,6 +144,7 @@ pub struct Columns {
 #[derive(Debug, Clone)]
 pub struct Poly {
     pub name: String,
+    // pub query_names: HashMap<ColumnQuery, String>,
     pub exp: Expr<Var>,
 }
 
@@ -173,6 +174,11 @@ pub struct Info {
     pub challenges: Vec<Challenge>,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct Metadata {
+    pub query_names: Vec<(Expr<Var>, HashMap<ColumnQuery, String>)>,
+}
+
 /// Plonkish Arithmetization Format
 #[derive(Debug, Default, Clone)]
 pub struct Plaf {
@@ -182,6 +188,8 @@ pub struct Plaf {
     pub columns: Columns,
     /// List of polynomial identity constraints
     pub polys: Vec<Poly>,
+    /// Matadata
+    pub metadata: Metadata,
     /// List of lookup constraints
     pub lookups: Vec<Lookup>,
     /// List of copy constraints
@@ -200,7 +208,7 @@ impl Display for VarDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use Var::*;
         match self.v {
-            ColumnQuery { column, rotation } => {
+            Query(ColumnQuery { column, rotation }) => {
                 self.plaf.fmt_column(f, column)?;
                 if *rotation != 0 {
                     write!(f, "[{}]", rotation)?;
@@ -273,7 +281,7 @@ impl Plaf {
     }
     pub fn fmt_var<W: Write>(&self, f: &mut W, v: &Var) -> fmt::Result {
         match v {
-            Var::ColumnQuery { column, rotation } => {
+            Var::Query(ColumnQuery { column, rotation }) => {
                 self.fmt_column(f, column)?;
                 if *rotation != 0 {
                     write!(f, "[{}]", rotation)?;
@@ -323,39 +331,39 @@ impl Plaf {
             }
         }
         for (index, column) in self.columns.witness.iter().enumerate() {
-            let var = Var::ColumnQuery {
+            let var = Var::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Witness,
                     index,
                 },
                 rotation: 0,
-            };
+            });
             map.insert(column.name.clone(), var.clone());
             for alias in &column.aliases {
                 map.insert(alias.clone(), var.clone());
             }
         }
         for (index, column) in self.columns.fixed.iter().enumerate() {
-            let var = Var::ColumnQuery {
+            let var = Var::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Fixed,
                     index,
                 },
                 rotation: 0,
-            };
+            });
             map.insert(column.name.clone(), var.clone());
             for alias in &column.aliases {
                 map.insert(alias.clone(), var.clone());
             }
         }
         for (index, column) in self.columns.public.iter().enumerate() {
-            let var = Var::ColumnQuery {
+            let var = Var::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Public,
                     index,
                 },
                 rotation: 0,
-            };
+            });
             map.insert(column.name.clone(), var.clone());
             for alias in &column.aliases {
                 map.insert(alias.clone(), var.clone());
@@ -403,7 +411,7 @@ impl Plaf {
             e,
             &|v: &Var, offset: usize| -> Expr<Cell> {
                 match v {
-                    expr::PlonkVar::ColumnQuery { column, rotation } => {
+                    expr::PlonkVar::Query(ColumnQuery { column, rotation }) => {
                         let offset = (offset as i32 + rotation)
                             .rem_euclid(self.info.num_rows as i32)
                             as usize;

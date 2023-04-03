@@ -1,5 +1,5 @@
 use crate::{
-    expr::{self, get_field_p, ColumnKind, Expr, PlonkVar as Var},
+    expr::{self, get_field_p, ColumnKind, ColumnQuery, Expr, PlonkVar as Var},
     plaf::{
         CellValue, Challenge, ColumnFixed, ColumnPublic, ColumnWitness, CopyC, Lookup, Plaf, Poly,
         Witness,
@@ -10,8 +10,9 @@ use halo2_proofs::{
     halo2curves::group::ff::{Field, PrimeField},
     plonk::{
         Advice, Any, Assigned, Assignment, Challenge as Halo2Challenge, Circuit, Column,
-        ConstraintSystem, Error, Fixed, FloorPlanner, Instance, Selector,
+        ConstraintSystem, Error, Expression, Fixed, FixedQuery, FloorPlanner, Instance, Selector,
     },
+    poly::Rotation,
 };
 use num_bigint::BigUint;
 use std::{collections::HashMap, fmt::Debug, ops::Range};
@@ -393,10 +394,79 @@ pub fn gen_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
     Ok(witness)
 }
 
+pub fn expression_to_var<F: Field>(e: &Expression<F>) -> Option<Var> {
+    use Var::*;
+    match e {
+        Expression::Fixed(q) => Some(Query(ColumnQuery {
+            column: expr::Column {
+                kind: ColumnKind::Fixed,
+                index: q.column_index(),
+            },
+            rotation: q.rotation().0,
+        })),
+        Expression::Advice(q) => Some(Query(ColumnQuery {
+            column: expr::Column {
+                kind: ColumnKind::Witness,
+                index: q.column_index(),
+            },
+            rotation: q.rotation().0,
+        })),
+        Expression::Instance(q) => Some(Query(ColumnQuery {
+            column: expr::Column {
+                kind: ColumnKind::Public,
+                index: q.column_index(),
+            },
+            rotation: q.rotation().0,
+        })),
+        Expression::Challenge(c) => Some(Challenge {
+            index: c.index(),
+            phase: c.phase() as usize,
+        }),
+        _ => None,
+    }
+}
+
+fn convert_query_names<F: Field>(
+    map: &HashMap<Expression<F>, String>,
+) -> HashMap<ColumnQuery, String> {
+    let mut new_map = HashMap::new();
+    use Var::*;
+    for (e, name) in map.iter() {
+        if let Some(v) = expression_to_var(e) {
+            if let Query(q) = v {
+                new_map.insert(q, name.clone());
+            }
+        }
+    }
+    new_map
+}
+
+fn replace_selectors_no_compress<F: Field>(expr: &mut Expression<F>, fixed_offset: usize) {
+    *expr = expr.evaluate(
+        &|constant| Expression::Constant(constant),
+        &|selector| {
+            Expression::Fixed(FixedQuery {
+                index: 0,
+                column_index: fixed_offset + selector.index(),
+                rotation: Rotation(0),
+            })
+        },
+        &|query| Expression::Fixed(query),
+        &|query| Expression::Advice(query),
+        &|query| Expression::Instance(query),
+        &|challenge| Expression::Challenge(challenge),
+        &|a| -a,
+        &|a, b| a + b,
+        &|a, b| a * b,
+        &|a, f| a * f,
+    );
+}
+
 pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit<F>>(
     k: u32,
     circuit: &ConcreteCircuit,
 ) -> Result<Plaf, Error> {
+    let compress_selectors = false;
     let n = 1 << k;
 
     let mut cs = ConstraintSystem::default();
@@ -429,16 +499,56 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         cs.constants().clone(),
     )?;
 
-    let (cs, selector_polys) = cs.compress_selectors(assembly.selectors.clone());
-    assembly
-        .fixed
-        .extend(selector_polys.into_iter().map(|poly| {
+    // Number of fixed columns before converting selectors into fixed columns
+    let num_fixed_columns_orig = cs.num_fixed_columns();
+    let cs = if compress_selectors {
+        let (cs, selector_polys) = cs.compress_selectors(assembly.selectors.clone());
+        // TODO: Turn selectors in query_names into new selector expressions from fixed columns
+        assembly
+            .fixed
+            .extend(selector_polys.into_iter().map(|poly| {
+                let mut v = vec![CellValue::Unassigned; n];
+                for (v, p) in v.iter_mut().zip(&poly[..]) {
+                    *v = CellValue::Assigned(*p);
+                }
+                v
+            }));
+        cs
+    } else {
+        // Substitute selectors for the real fixed columns in all gates
+        for expr in cs
+            .gates_mut()
+            .iter_mut()
+            .flat_map(|gate| gate.polynomials_mut().iter_mut())
+        {
+            replace_selectors_no_compress(expr, num_fixed_columns_orig);
+        }
+        // Substitute non-simple selectors for the real fixed columns in all
+        // lookup expressions
+        for expr in cs.lookups_mut().iter_mut().flat_map(|lookup| {
+            lookup
+                .input_expressions
+                .iter_mut()
+                .chain(lookup.table_expressions.iter_mut())
+        }) {
+            replace_selectors_no_compress(expr, num_fixed_columns_orig);
+        }
+        // Substitute selectors for the real fixed columns in all query_name expressions
+        for (sel_expr, _map) in cs.query_names_mut().iter_mut() {
+            replace_selectors_no_compress(sel_expr, num_fixed_columns_orig);
+        }
+        cs.num_fixed_columns += cs.num_selectors();
+
+        assembly.fixed.extend(assembly.selectors.iter().map(|col| {
             let mut v = vec![CellValue::Unassigned; n];
-            for (v, p) in v.iter_mut().zip(&poly[..]) {
-                *v = CellValue::Assigned(*p);
+            for (v, p) in v.iter_mut().zip(&col[..]) {
+                *v = CellValue::Assigned(if *p { F::one() } else { F::zero() });
             }
             v
         }));
+        cs
+    };
+
     let mut plaf = Plaf::default();
     let p = get_field_p::<F>();
     plaf.info.p = p;
@@ -453,9 +563,12 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
     }
 
     for i in 0..cs.num_fixed_columns() {
-        plaf.columns
-            .fixed
-            .push(ColumnFixed::new(format!("f{:02}", i)));
+        let name = if i < num_fixed_columns_orig {
+            format!("f{:02}", i)
+        } else {
+            format!("s{:02}", i - num_fixed_columns_orig)
+        };
+        plaf.columns.fixed.push(ColumnFixed::new(name));
     }
     for i in 0..cs.num_instance_columns() {
         plaf.columns
@@ -468,6 +581,15 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
             format!("w{:02}", i),
             column_phase[i] as usize,
         ));
+    }
+    for (column, name) in cs.general_column_annotations().iter() {
+        match column.column_type {
+            Any::Advice(_) => plaf.columns.witness[column.index]
+                .aliases
+                .push(name.clone()),
+            Any::Fixed => plaf.columns.fixed[column.index].aliases.push(name.clone()),
+            Any::Instance => plaf.columns.public[column.index].aliases.push(name.clone()),
+        }
     }
 
     for (_region_name, region) in assembly.regions {
@@ -492,11 +614,24 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
                 continue;
             }
             plaf.polys.push(Poly {
-                name: format!("{} {:0decimals$}", name, i, decimals = len_log10),
+                name: format!(
+                    "{} {:0decimals$} -> {n}",
+                    name,
+                    i,
+                    decimals = len_log10,
+                    n = gate.constraint_name(i)
+                ),
+                // query_names: query_names.clone(),
                 exp,
             });
         }
     }
+    plaf.metadata.query_names = cs
+        .query_names()
+        .iter()
+        .map(|(selector, map)| (Expr::<Var>::from(selector), convert_query_names(map)))
+        .collect();
+
     for lookup in cs.lookups() {
         let name = lookup.name();
         let lhs = lookup.input_expressions();

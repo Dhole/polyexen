@@ -1,5 +1,5 @@
 use crate::{
-    expr::{self, ColumnKind, Expr, PlonkVar as Var},
+    expr::{self, ColumnKind, ColumnQuery, Expr, PlonkVar as Var},
     plaf::{Plaf, Witness},
 };
 use halo2_proofs::{
@@ -97,10 +97,10 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
         match self {
             Expr::Const(f) => Constant(f.to_field()),
             Expr::Var(v) => match v {
-                Var::ColumnQuery {
+                Var::Query(ColumnQuery {
                     column: expr::Column { kind, index },
                     rotation,
-                } => queries.get(meta, columns, *kind, *index, *rotation),
+                }) => queries.get(meta, columns, *kind, *index, *rotation),
                 Var::Challenge { index: _, phase: _ } => {
                     // FIXME: Figure out a way to use challenges
                     // meta.query_challenge(columns.challenges[*index])

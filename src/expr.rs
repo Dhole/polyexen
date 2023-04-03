@@ -61,8 +61,14 @@ pub struct Column {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ColumnQuery {
+    pub column: Column,
+    pub rotation: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PlonkVar {
-    ColumnQuery { column: Column, rotation: i32 },
+    Query(ColumnQuery),
     Challenge { index: usize, phase: usize },
 }
 
@@ -73,10 +79,10 @@ impl Display for PlonkVar {
         use ColumnKind::*;
         use PlonkVar::*;
         match self {
-            ColumnQuery {
+            Query(ColumnQuery {
                 column: Column { kind, index },
                 rotation,
-            } => {
+            }) => {
                 write!(
                     f,
                     "{}{:02}",
@@ -103,27 +109,27 @@ impl<F: PrimeField<Repr = [u8; 32]>> From<&Expression<F>> for Expr<PlonkVar> {
         match e {
             Constant(c) => Expr::Const(BigUint::from_bytes_le(&c.to_repr()[..])),
             Selector(_) => unreachable!("selector exoression is unsupported"),
-            Fixed(query) => Expr::Var(PlonkVar::ColumnQuery {
+            Fixed(query) => Expr::Var(PlonkVar::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Fixed,
                     index: query.column_index(),
                 },
                 rotation: query.rotation().0,
-            }),
-            Advice(query) => Expr::Var(PlonkVar::ColumnQuery {
+            })),
+            Advice(query) => Expr::Var(PlonkVar::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Witness,
                     index: query.column_index(),
                 },
                 rotation: query.rotation().0,
-            }),
-            Instance(query) => Expr::Var(PlonkVar::ColumnQuery {
+            })),
+            Instance(query) => Expr::Var(PlonkVar::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Public,
                     index: query.column_index(),
                 },
                 rotation: query.rotation().0,
-            }),
+            })),
             Challenge(challenge) => Expr::Var(PlonkVar::Challenge {
                 index: challenge.index(),
                 phase: challenge.phase() as usize,
@@ -316,6 +322,20 @@ pub(crate) fn mul(lhs: BigUint, rhs: &BigUint, p: &BigUint) -> BigUint {
     (lhs * rhs).mod_floor(p)
 }
 
+pub(crate) fn pow(base: &BigUint, exponent: u32, p: &BigUint) -> BigUint {
+    let mut exponent = exponent;
+    let mut res = BigUint::one();
+    let mut acc = base.clone();
+    while exponent != 0 {
+        if (exponent & 1) != 0 {
+            res = mul(res, &acc, p);
+        }
+        acc = mul(acc.clone(), &acc, p);
+        exponent = exponent >> 1;
+    }
+    res
+}
+
 pub(crate) fn modinv(n: BigUint, p: &BigUint) -> BigUint {
     if p.is_one() {
         return BigUint::one();
@@ -384,10 +404,13 @@ impl<V: Var> Expr<V> {
         // p-1 == -1
         // let p_1 = p.clone() - BigUint::one();
         match self {
-            Pow(e, f) => {
-                let e = e._simplify(p, ip);
-                Pow(Box::new(e), f)
-            }
+            Pow(e, f) => match *e {
+                Const(e) => Const(pow(&e, f, p)),
+                _ => {
+                    let e = e._simplify(p, ip);
+                    Pow(Box::new(e), f)
+                }
+            },
             Neg(e) => {
                 let e = e._simplify(p, ip);
                 match e {
@@ -489,7 +512,7 @@ impl<V: Var> Expr<V> {
         }
     }
 
-    fn is_linear_comb(e: &Self, base: &mut Option<Self>, elems: &mut Vec<Self>) -> bool {
+    fn is_recursive_linear_comb(e: &Self, base: &mut Option<Self>, elems: &mut Vec<Self>) -> bool {
         use Expr::*;
         // match pattern "sum_lhs + sum_rhs"
         // where "sum_rhs = mul_lhs * mul_rhs"
@@ -536,7 +559,7 @@ impl<V: Var> Expr<V> {
                                 elems.push(mul_rhs.clone());
                                 return true;
                             }
-                            return Self::is_linear_comb(&mul_rhs, base, elems);
+                            return Self::is_recursive_linear_comb(&mul_rhs, base, elems);
                         }
                         return false;
                     }
@@ -547,15 +570,66 @@ impl<V: Var> Expr<V> {
         }
     }
 
-    fn get_linear_comb(&self) -> Option<(Self, Vec<Self>)> {
+    fn get_recursive_linear_comb(&self) -> Option<(Self, Vec<Self>)> {
         let mut base = None;
         let mut elems = Vec::new();
-        let result = Self::is_linear_comb(self, &mut base, &mut elems);
+        let result = Self::is_recursive_linear_comb(self, &mut base, &mut elems);
         if result {
             Some((base.expect("base found"), elems))
         } else {
             None
         }
+    }
+
+    /// Try to match a linear combination pattern heuristically and return the base and elements
+    /// from it.
+    pub fn get_linear_comb(&self, p: &BigUint) -> Option<(Self, Vec<Self>)> {
+        use Expr::*;
+        let xs = if let Sum(xs) = self {
+            xs
+        } else {
+            return None;
+        };
+        if xs.len() < 2 {
+            return None;
+        }
+        let mut xs = xs.iter();
+        let mut elems = Vec::new();
+        elems.push(xs.next().unwrap().clone());
+        let second = xs.next().unwrap();
+        let base = if let Mul(pair) = second {
+            if pair.len() != 2 {
+                return None;
+            }
+            if let Const(b) = &pair[0] {
+                elems.push(pair[1].clone());
+                b
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+        let mut power = base.clone();
+        for x in xs {
+            if let Mul(pair) = x {
+                if pair.len() != 2 {
+                    return None;
+                }
+                if let Const(b) = &pair[0] {
+                    power = mul(power, base, p);
+                    if b != &power {
+                        return None;
+                    }
+                    elems.push(pair[1].clone());
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            };
+        }
+        Some((Const(base.clone()), elems))
     }
 
     // Find linear combinations expressed in recursive form "a + r * (b + r * (c + r * (...)))"
@@ -566,7 +640,7 @@ impl<V: Var> Expr<V> {
             Neg(e) => Neg(Box::new(e.normalize_linear_comb())),
             Sum(xs) => {
                 let e = Sum(xs);
-                if let Some((base, elems)) = e.get_linear_comb() {
+                if let Some((base, elems)) = e.get_recursive_linear_comb() {
                     if elems.len() >= 3 {
                         let mut xs = Vec::with_capacity(elems.len());
                         for (i, elem) in elems.into_iter().enumerate() {
@@ -861,6 +935,13 @@ impl<V: Var> Expr<V> {
             _ => false,
         }
     }
+
+    pub fn is_const_not_zero(&self) -> bool {
+        match self {
+            Self::Const(c) => !c.is_zero(),
+            _ => false,
+        }
+    }
 }
 
 pub struct ExprDisplay<'a, V: Var, T>
@@ -926,7 +1007,16 @@ impl<V: Var> Expr<V> {
                 fmt_exp(e, f, parens)?;
                 write!(f, "^{}", c)
             }
-            Const(c) => write!(f, "{}", c),
+            Const(c) => {
+                let c_bits = c.bits();
+                if c_bits >= 8 && c.count_ones() == 1 {
+                    write!(f, "2^{}", c.trailing_zeros().unwrap())
+                } else if c_bits >= 16 {
+                    write!(f, "0x{:x}", c)
+                } else {
+                    write!(f, "{}", c)
+                }
+            }
             Var(v) => fmt_var(f, v),
             Sum(es) => {
                 for (i, e) in es.iter().enumerate() {
@@ -1170,6 +1260,15 @@ mod tests_with_parser {
         let e1 = parse_expr(e1_str).unwrap();
         let e2 = e1.simplify_move(&p);
         println!("{:?}", e2);
+        println!("{}", e2);
+    }
+
+    #[test]
+    fn test_simplify02() {
+        let p = BigUint::from(2u64).pow(256) - BigUint::from(1539u64);
+        let e1_str = "1*1*1*(5 + 5 - (r.b00 + 2^8*r.b01 + 2^16*r.b02 + 2^24*r.b03 + 2^32*r.b04 + 2^40*r.b05 + 2^48*r.b06 + 2^56*r.b07 + 2^64*r.b08 + 2^72*r.b09 + 2^80*r.b10 + 2^88*r.b11 + 2^96*r.b12 + 2^104*r.b13 + 2^112*r.b14 + 2^120*r.b15 + carryLo*2^128) + 2^8*5 + 2^16*5 + 2^24*5 + 2^32*5 + 2^40*5 + 2^48*5 + 2^56*5 + 2^64*5 + 2^72*5 + 2^80*5 + 2^88*5 + 2^96*5 + 2^104*5 + 2^112*5 + 2^120*5 + 2^8*5 + 2^16*5 + 2^24*5 + 2^32*5 + 2^40*5 + 2^48*5 + 2^56*5 + 2^64*5 + 2^72*5 + 2^80*5 + 2^88*5 + 2^96*5 + 2^104*5 + 2^112*5 + 2^120*5)";
+        let e1 = parse_expr(e1_str).unwrap();
+        let e2 = e1.simplify_move(&p);
         println!("{}", e2);
     }
 }
