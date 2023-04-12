@@ -8,3 +8,4 @@ pub mod analyze;
 pub mod expr;
 pub mod parser;
 pub mod plaf;
+pub mod regex;

@@ -1,4 +1,7 @@
-use crate::expr::{modinv, mul, neg, Expr, Var};
+use crate::{
+    expr::{modinv, mul, neg, Expr, Var},
+    regex::ExprRegex,
+};
 use std::fmt::{self, Display};
 
 use num_bigint::{BigInt, BigUint, Sign};
@@ -234,26 +237,26 @@ pub fn solve_ranged_linear_comb<V: Var>(
     p: &BigUint,
     analysis: &mut Analysis<V>,
 ) -> Vec<V> {
-    use Expr::*;
+    let regex = ExprRegex::Sum(Box::new(ExprRegex::ArrayExact(
+        2,
+        vec![
+            ExprRegex::ConstExtract("value".to_string()),
+            ExprRegex::Neg(Box::new(ExprRegex::ExprExtract("exp".to_string()))),
+        ],
+    )));
+
     let empty = Vec::new();
-    let xs = if let Sum(xs) = e {
-        xs
+    let (mut value, exp) = if let Some(matches) = regex.match_extract(e) {
+        (
+            *matches.consts.get("value").expect("value not found"),
+            *matches.exprs.get("expr").expect("value not found"),
+        )
     } else {
         return empty;
     };
-    if xs.len() != 2 {
-        return empty;
-    }
-    let mut value = if let Const(f) = &xs[0] {
-        f.clone()
-    } else {
-        return empty;
-    };
-    let exp = if let Neg(e) = &xs[1] {
-        e
-    } else {
-        return empty;
-    };
+
+    use Expr::*;
+
     let (base, elems) = if let Some((base, elems)) = exp.get_linear_comb(p) {
         (base, elems)
     } else {
