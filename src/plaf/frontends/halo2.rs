@@ -15,6 +15,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use num_bigint::BigUint;
+use num_traits::One;
 use std::{collections::HashMap, fmt::Debug, ops::Range};
 
 #[derive(Debug)]
@@ -92,13 +93,20 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
             row,
             self.usable_rows
         );
-
-        *self
+        let cell = self
             .advice
             .get_mut(column.index())
             .and_then(|v| v.get_mut(row))
-            .ok_or(Error::BoundsFailure)? =
-            CellValue::Assigned(to().into_field().evaluate().assign()?);
+            .ok_or(Error::BoundsFailure)?;
+
+        let mut known = false;
+        to().into_field().evaluate().map(|f| {
+            known = true;
+            *cell = CellValue::Assigned(f);
+        });
+        if !known {
+            return Err(Error::Synthesis);
+        }
 
         Ok(())
     }
@@ -257,12 +265,20 @@ impl<F: Field> Assignment<F> for Assembly<F> {
             self.usable_rows
         );
 
-        *self
+        let cell = self
             .fixed
             .get_mut(column.index())
             .and_then(|v| v.get_mut(row))
-            .ok_or(Error::BoundsFailure)? =
-            CellValue::Assigned(to().into_field().evaluate().assign()?);
+            .ok_or(Error::BoundsFailure)?;
+
+        let mut known = false;
+        to().into_field().evaluate().map(|f| {
+            known = true;
+            *cell = CellValue::Assigned(f);
+        });
+        if !known {
+            return Err(Error::Synthesis);
+        }
 
         Ok(())
     }
@@ -347,7 +363,7 @@ pub fn gen_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
     let n = 1 << k;
 
     let mut cs = ConstraintSystem::default();
-    let config = circuit.configure(&mut cs);
+    let config = ConcreteCircuit::configure_with_params(&mut cs, circuit.params());
 
     let instance = instance
         .into_iter()
@@ -356,7 +372,7 @@ pub fn gen_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
                 return Err(Error::InstanceTooLarge);
             }
 
-            instance.resize(n, F::zero());
+            instance.resize(n, F::ZERO);
             Ok(instance)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -426,6 +442,7 @@ pub fn expression_to_var<F: Field>(e: &Expression<F>) -> Option<Var> {
     }
 }
 
+#[allow(dead_code)]
 fn convert_query_names<F: Field>(
     map: &HashMap<Expression<F>, String>,
 ) -> HashMap<ColumnQuery, String> {
@@ -441,15 +458,36 @@ fn convert_query_names<F: Field>(
     new_map
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct _FixedQuery {
+    /// Query index
+    pub index: Option<usize>,
+    /// Column index
+    pub column_index: usize,
+    /// Rotation of this query
+    pub rotation: Rotation,
+}
+
+assert_eq_size!(_FixedQuery, FixedQuery);
+
+fn new_fixed_query(index: Option<usize>, column_index: usize, rotation: Rotation) -> FixedQuery {
+    let fixed_query = _FixedQuery {
+        index,
+        column_index,
+        rotation,
+    };
+    unsafe { std::mem::transmute::<_FixedQuery, FixedQuery>(fixed_query) }
+}
+
 fn replace_selectors_no_compress<F: Field>(expr: &mut Expression<F>, fixed_offset: usize) {
     *expr = expr.evaluate(
         &|constant| Expression::Constant(constant),
         &|selector| {
-            Expression::Fixed(FixedQuery {
-                index: 0,
-                column_index: fixed_offset + selector.index(),
-                rotation: Rotation(0),
-            })
+            Expression::Fixed(new_fixed_query(
+                None,
+                fixed_offset + selector.index(),
+                Rotation(0),
+            ))
         },
         &|query| Expression::Fixed(query),
         &|query| Expression::Advice(query),
@@ -470,7 +508,7 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
     let n = 1 << k;
 
     let mut cs = ConstraintSystem::default();
-    let config = circuit.configure(&mut cs);
+    let config = ConcreteCircuit::configure_with_params(&mut cs, circuit.params());
 
     // let degree = cs.degree();
 
@@ -515,38 +553,40 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
             }));
         cs
     } else {
+        cs
         // Substitute selectors for the real fixed columns in all gates
-        for expr in cs
-            .gates_mut()
-            .iter_mut()
-            .flat_map(|gate| gate.polynomials_mut().iter_mut())
-        {
-            replace_selectors_no_compress(expr, num_fixed_columns_orig);
-        }
+        // for expr in cs
+        //     .gates_mut()
+        //     .iter_mut()
+        //     .flat_map(|gate| gate.polynomials_mut().iter_mut())
+        // {
+        //     replace_selectors_no_compress(expr, num_fixed_columns_orig);
+        // }
         // Substitute non-simple selectors for the real fixed columns in all
         // lookup expressions
-        for expr in cs.lookups_mut().iter_mut().flat_map(|lookup| {
-            lookup
-                .input_expressions
-                .iter_mut()
-                .chain(lookup.table_expressions.iter_mut())
-        }) {
-            replace_selectors_no_compress(expr, num_fixed_columns_orig);
-        }
+        //for expr in cs.lookups_mut().iter_mut().flat_map(|lookup| {
+        //    lookup
+        //        .input_expressions
+        //        .iter_mut()
+        //        .chain(lookup.table_expressions.iter_mut())
+        //}) {
+        //    replace_selectors_no_compress(expr, num_fixed_columns_orig);
+        //}
         // Substitute selectors for the real fixed columns in all query_name expressions
-        for (sel_expr, _map) in cs.query_names_mut().iter_mut() {
-            replace_selectors_no_compress(sel_expr, num_fixed_columns_orig);
-        }
-        cs.num_fixed_columns += cs.num_selectors();
+        // TODO:
+        // for (sel_expr, _map) in cs.query_names_mut().iter_mut() {
+        //     replace_selectors_no_compress(sel_expr, num_fixed_columns_orig);
+        // }
+        // cs.num_fixed_columns += cs.num_selectors();
 
-        assembly.fixed.extend(assembly.selectors.iter().map(|col| {
-            let mut v = vec![CellValue::Unassigned; n];
-            for (v, p) in v.iter_mut().zip(&col[..]) {
-                *v = CellValue::Assigned(if *p { F::one() } else { F::zero() });
-            }
-            v
-        }));
-        cs
+        // assembly.fixed.extend(assembly.selectors.iter().map(|col| {
+        //     let mut v = vec![CellValue::Unassigned; n];
+        //     for (v, p) in v.iter_mut().zip(&col[..]) {
+        //         *v = CellValue::Assigned(if *p { F::ONE } else { F::ZERO });
+        //     }
+        //     v
+        // }));
+        // cs
     };
 
     let mut plaf = Plaf::default();
@@ -566,8 +606,15 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         let name = if i < num_fixed_columns_orig {
             format!("f{:02}", i)
         } else {
+            // This should only happen when `compress_selectors = true`, otherwise
+            // `num_fixed_columns_orig == cs.num_fixed_columns()`
             format!("s{:02}", i - num_fixed_columns_orig)
         };
+        plaf.columns.fixed.push(ColumnFixed::new(name));
+    }
+    // If `compress_selectors = true`, then there should be 0 selectors in `cs`.
+    for i in 0..cs.num_selectors() {
+        let name = format!("s{:02}", i);
         plaf.columns.fixed.push(ColumnFixed::new(name));
     }
     for i in 0..cs.num_instance_columns() {
@@ -583,12 +630,16 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         ));
     }
     for (column, name) in cs.general_column_annotations().iter() {
-        match column.column_type {
-            Any::Advice(_) => plaf.columns.witness[column.index]
+        match column.column_type() {
+            Any::Advice(_) => plaf.columns.witness[column.index()]
                 .aliases
                 .push(name.clone()),
-            Any::Fixed => plaf.columns.fixed[column.index].aliases.push(name.clone()),
-            Any::Instance => plaf.columns.public[column.index].aliases.push(name.clone()),
+            Any::Fixed => plaf.columns.fixed[column.index()]
+                .aliases
+                .push(name.clone()),
+            Any::Instance => plaf.columns.public[column.index()]
+                .aliases
+                .push(name.clone()),
         }
     }
 
@@ -607,7 +658,14 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         let name = gate.name();
         let len_log10 = (gate.polynomials().len() as f64).log10().ceil() as usize;
         for (i, poly) in gate.polynomials().iter().enumerate() {
-            let exp = Expr::<Var>::from(poly);
+            let exp = if !compress_selectors {
+                // Substitute selectors for the real fixed columns in all gates
+                let mut poly = poly.clone();
+                replace_selectors_no_compress(&mut poly, num_fixed_columns_orig);
+                Expr::<Var>::from(&poly)
+            } else {
+                Expr::<Var>::from(poly)
+            };
             // let exp = exp.simplify(&p);
             if matches!(exp, Expr::Const(_)) {
                 // Skip constant expressions (which should be `p(x) = 0`)
@@ -626,18 +684,34 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
             });
         }
     }
-    plaf.metadata.query_names = cs
-        .query_names()
-        .iter()
-        .map(|(selector, map)| (Expr::<Var>::from(selector), convert_query_names(map)))
-        .collect();
+    // TODO: Add support for query_names in halo2
+    // plaf.metadata.query_names = cs
+    //     .query_names()
+    //     .iter()
+    //     .map(|(selector, map)| (Expr::<Var>::from(selector), convert_query_names(map)))
+    //     .collect();
 
     for lookup in cs.lookups() {
         let name = lookup.name();
         let lhs = lookup.input_expressions();
         let rhs = lookup.table_expressions();
-        let lhs = lhs.iter().map(|e| Expr::<Var>::from(e)).collect();
-        let rhs = rhs.iter().map(|e| Expr::<Var>::from(e)).collect();
+        let (lhs, rhs) = if !compress_selectors {
+            // Substitute non-simple selectors for the real fixed columns in all
+            // lookup expressions
+            let (mut lhs, mut rhs) = (lhs.clone(), rhs.clone());
+            lhs.iter_mut()
+                .chain(rhs.iter_mut())
+                .for_each(|ref mut exp| replace_selectors_no_compress(exp, num_fixed_columns_orig));
+            (
+                lhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+                rhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+            )
+        } else {
+            (
+                lhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+                rhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+            )
+        };
         plaf.lookups.push(Lookup {
             name: name.to_string(),
             exps: (lhs, rhs),
@@ -672,5 +746,16 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         }
         plaf.fixed.push(fixed);
     }
+    // If `compress_selectors = true`, then there should be 0 selectors in `cs`.
+    for i in 0..cs.num_selectors() {
+        let mut fixed = vec![None; n];
+        for (j, enabled) in assembly.selectors[i].iter().enumerate() {
+            if *enabled {
+                fixed[j] = Some(BigUint::one());
+            }
+        }
+        plaf.fixed.push(fixed);
+    }
+
     Ok(plaf)
 }

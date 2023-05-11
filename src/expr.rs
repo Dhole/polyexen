@@ -42,7 +42,7 @@ pub enum Expr<V: Var> {
 pub type Ex = Expr<String>;
 
 pub fn get_field_p<F: Field + PrimeField<Repr = [u8; 32]>>() -> BigUint {
-    let p_1 = F::zero() - F::one();
+    let p_1 = F::ZERO - F::ONE;
     let p_1 = BigUint::from_bytes_le(&p_1.to_repr()[..]);
     p_1 + 1u64
 }
@@ -817,13 +817,22 @@ impl<V: Var> Expr<V> {
                 let mut mul_vars: Vec<Expr<V>> = Vec::new();
                 let mut mul_sums: Vec<Vec<Expr<V>>> = Vec::new();
 
+                let mut ys: Vec<Expr<V>> = Vec::new();
+                // Flatten exponentiations
+                for x in xs.into_iter() {
+                    match x {
+                        Pow(e, f) => (0..f).for_each(|_| ys.push(e.as_ref().clone())),
+                        e => ys.push(e),
+                    }
+                }
+                let xs = ys;
+
                 for x in xs {
                     match x {
                         Const(f) => mul_const = mul(mul_const, &f, p),
                         Var(v) => mul_vars.push(Var(v)),
                         Sum(xs) => mul_sums.push(xs),
                         _ => {
-                            dbg!(x);
                             unreachable!();
                         }
                     }
@@ -1158,7 +1167,7 @@ mod tests {
             let e2 = e1.clone().normalize_move(&p);
             let eval1 = e1.eval(&p, &vars);
             let eval2 = e2.eval(&p, &vars);
-            assert_eq!(eval1, eval2);
+            assert_eq!(eval1, eval2, "{} -> {}", e1, e2);
         }
     }
 

@@ -141,6 +141,8 @@ struct _Cell {
     column: Column<Any>,
 }
 
+assert_eq_size!(_Cell, Cell);
+
 fn new_cell(column: Column<Any>, offset: usize) -> Cell {
     let cell = _Cell {
         region_index: RegionIndex::from(0),
@@ -156,6 +158,7 @@ fn new_cell(column: Column<Any>, offset: usize) -> Cell {
 impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
     type Config = H2Config;
     type FloorPlanner = SimpleFloorPlanner;
+    type Params = Plaf;
 
     fn without_witnesses(&self) -> Self {
         Self {
@@ -168,10 +171,16 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
         }
     }
 
-    fn configure(&self, meta: &mut ConstraintSystem<F>) -> Self::Config {
+    fn params(&self) -> Self::Params {
+        // TODO: Avoid cloning by storing Plaf in a RefCell
+        self.plaf.clone()
+    }
+
+    fn configure_with_params(meta: &mut ConstraintSystem<F>, params: Self::Params) -> Self::Config {
+        let plaf = &params;
         // Allocate columns
         let mut advice_columns = Vec::new();
-        for column in &self.plaf.columns.witness {
+        for column in &plaf.columns.witness {
             advice_columns.push(match column.phase {
                 0 => meta.advice_column_in(FirstPhase),
                 1 => meta.advice_column_in(SecondPhase),
@@ -180,11 +189,11 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
             });
         }
         let mut fixed_columns = Vec::new();
-        for _column in &self.plaf.columns.fixed {
+        for _column in &plaf.columns.fixed {
             fixed_columns.push(meta.fixed_column());
         }
         let mut instance_columns = Vec::new();
-        for _column in &self.plaf.columns.public {
+        for _column in &plaf.columns.public {
             instance_columns.push(meta.instance_column());
         }
 
@@ -197,7 +206,7 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
         };
 
         // Enable equality for copy constrains
-        for copy in &self.plaf.copys {
+        for copy in &plaf.copys {
             meta.enable_equality(to_column_any(&copy.columns.0));
             meta.enable_equality(to_column_any(&copy.columns.1));
         }
@@ -220,17 +229,17 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
 
         // Name columns for lookups
         for (index, column) in columns.advice.iter().enumerate() {
-            meta.annotate_lookup_any_column(*column, || self.plaf.columns.witness[index].name());
+            meta.annotate_lookup_any_column(*column, || plaf.columns.witness[index].name());
         }
         for (index, column) in columns.fixed.iter().enumerate() {
-            meta.annotate_lookup_any_column(*column, || self.plaf.columns.fixed[index].name());
+            meta.annotate_lookup_any_column(*column, || plaf.columns.fixed[index].name());
         }
 
         // Set polynomial constraints
         meta.create_gate("main", |meta| {
             let mut queries = H2Queries::new();
             let mut constraints: Vec<(&'static str, Expression<F>)> = Vec::new();
-            for poly in &self.plaf.polys {
+            for poly in &plaf.polys {
                 constraints.push((
                     Box::leak(poly.name.clone().into_boxed_str()),
                     poly.exp.to_halo2_expr(meta, &columns, &mut queries),
@@ -240,7 +249,7 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
         });
 
         // Set lookups
-        for lookup in &self.plaf.lookups {
+        for lookup in &plaf.lookups {
             meta.lookup_any(Box::leak(lookup.name.clone().into_boxed_str()), |meta| {
                 let mut queries = H2Queries::new();
                 let mut map = Vec::new();
@@ -255,6 +264,10 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
         }
 
         Self::Config { columns }
+    }
+
+    fn configure(_meta: &mut ConstraintSystem<F>) -> Self::Config {
+        unreachable!();
     }
 
     fn synthesize(
