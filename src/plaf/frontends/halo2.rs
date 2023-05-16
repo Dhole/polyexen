@@ -504,7 +504,7 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
     k: u32,
     circuit: &ConcreteCircuit,
 ) -> Result<Plaf, Error> {
-    let compress_selectors = false;
+    let compress_selectors = true;
     let n = 1 << k;
 
     let mut cs = ConstraintSystem::default();
