@@ -219,7 +219,7 @@ dependencies = [
 [[package]]
 name = "halo2_proofs"
 version = "0.2.0"
-source = "git+https://github.com/privacy-scaling-explorations/halo2.git?rev=d3746109d7d38be53afc8ddae8fdfaf1f02ad1d7#d3746109d7d38be53afc8ddae8fdfaf1f02ad1d7"
+source = "git+https://github.com/privacy-scaling-explorations/halo2.git?rev=410bfdfa3ee9b37a990562d2f2639a4b2efe877b#410bfdfa3ee9b37a990562d2f2639a4b2efe877b"
 dependencies = [
  "blake2b_simd",
  "ff",

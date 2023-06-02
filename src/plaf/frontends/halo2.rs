@@ -2,7 +2,7 @@ use crate::{
     expr::{self, get_field_p, ColumnKind, ColumnQuery, Expr, PlonkVar as Var},
     plaf::{
         CellValue, Challenge, ColumnFixed, ColumnPublic, ColumnWitness, CopyC, Lookup, Plaf, Poly,
-        Witness,
+        Shuffle, Witness,
     },
 };
 use halo2_proofs::{
@@ -717,6 +717,34 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
             exps: (lhs, rhs),
         })
     }
+
+    for shuffle in cs.shuffles() {
+        let name = shuffle.name();
+        let lhs = shuffle.input_expressions();
+        let rhs = shuffle.shuffle_expressions();
+        let (lhs, rhs) = if !compress_selectors {
+            // Substitute non-simple selectors for the real fixed columns in all
+            // shuffle expressions
+            let (mut lhs, mut rhs) = (lhs.clone(), rhs.clone());
+            lhs.iter_mut()
+                .chain(rhs.iter_mut())
+                .for_each(|ref mut exp| replace_selectors_no_compress(exp, num_fixed_columns_orig));
+            (
+                lhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+                rhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+            )
+        } else {
+            (
+                lhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+                rhs.iter().map(|e| Expr::<Var>::from(e)).collect(),
+            )
+        };
+        plaf.shuffles.push(Shuffle {
+            name: name.to_string(),
+            exps: (lhs, rhs),
+        })
+    }
+
     let column_any_to_kind = |ct: &Any| match ct {
         Any::Advice(_) => ColumnKind::Witness,
         Any::Fixed => ColumnKind::Fixed,

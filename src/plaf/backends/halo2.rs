@@ -263,6 +263,21 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
             });
         }
 
+        // Set shuffles
+        for shuffle in &plaf.shuffles {
+            meta.shuffle(Box::leak(shuffle.name.clone().into_boxed_str()), |meta| {
+                let mut queries = H2Queries::new();
+                let mut map = Vec::new();
+                for (lhs, rhs) in shuffle.exps.0.iter().zip(shuffle.exps.1.iter()) {
+                    map.push((
+                        lhs.to_halo2_expr(meta, &columns, &mut queries),
+                        rhs.to_halo2_expr(meta, &columns, &mut queries),
+                    ));
+                }
+                map
+            });
+        }
+
         Self::Config { columns }
     }
 
