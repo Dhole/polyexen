@@ -1,4 +1,5 @@
 use crate::{
+    analyze::to_biguint,
     expr::{self, ColumnKind, ColumnQuery, Expr, PlonkVar as Var},
     plaf::{Plaf, Witness},
 };
@@ -337,7 +338,11 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                                 || "",
                                 config.columns.fixed[index],
                                 row,
-                                || Value::known(value.to_field()),
+                                || {
+                                    Value::known(
+                                        to_biguint(value.clone(), &self.plaf.info.p).to_field(),
+                                    )
+                                },
                             )?;
                         }
                     }
