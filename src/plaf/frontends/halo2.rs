@@ -1,4 +1,5 @@
 use crate::{
+    analyze::to_bigint,
     expr::{self, get_field_p, ColumnKind, ColumnQuery, Expr, PlonkVar as Var},
     plaf::{
         CellValue, Challenge, ColumnFixed, ColumnPublic, ColumnWitness, CopyC, Lookup, Plaf, Poly,
@@ -14,7 +15,7 @@ use halo2_proofs::{
     },
     poly::Rotation,
 };
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint, ToBigInt};
 use num_traits::One;
 use std::{collections::HashMap, fmt::Debug, ops::Range};
 
@@ -592,6 +593,9 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
     let mut plaf = Plaf::default();
     let p = get_field_p::<F>();
     plaf.info.p = p;
+    // When a constant takes <= max_bits in it's negative form, we use it's negative form.
+    let max_bits = plaf.info.p.bits();
+    let max_bits = max_bits - max_bits / 10;
 
     plaf.info.num_rows = 2usize.pow(k);
     let challenge_phase = cs.challenge_phase();
@@ -671,14 +675,16 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
                 // Skip constant expressions (which should be `p(x) = 0`)
                 continue;
             }
+            let mut poly_name = name.to_string();
+            if gate.polynomials().len() > 1 {
+                poly_name = format!("{} {:0decimals$}", poly_name, i, decimals = len_log10);
+            }
+            let constraint_name = gate.constraint_name(i);
+            if !constraint_name.is_empty() {
+                poly_name = format!("{} -> {}", poly_name, constraint_name);
+            }
             plaf.polys.push(Poly {
-                name: format!(
-                    "{} {:0decimals$} -> {n}",
-                    name,
-                    i,
-                    decimals = len_log10,
-                    n = gate.constraint_name(i)
-                ),
+                name: poly_name,
                 // query_names: query_names.clone(),
                 exp,
             });
@@ -741,7 +747,12 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         let mut fixed = vec![None; n];
         for (j, cell) in assembly.fixed[i].iter().enumerate() {
             if let CellValue::Assigned(v) = cell {
-                fixed[j] = Some(BigUint::from_bytes_le(&v.to_repr()[..]));
+                let c = to_bigint(
+                    &BigUint::from_bytes_le(&v.to_repr()[..]),
+                    &plaf.info.p,
+                    max_bits,
+                );
+                fixed[j] = Some(c);
             }
         }
         plaf.fixed.push(fixed);
@@ -751,7 +762,7 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         let mut fixed = vec![None; n];
         for (j, enabled) in assembly.selectors[i].iter().enumerate() {
             if *enabled {
-                fixed[j] = Some(BigUint::one());
+                fixed[j] = Some(BigInt::one());
             }
         }
         plaf.fixed.push(fixed);

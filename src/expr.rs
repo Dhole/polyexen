@@ -978,6 +978,17 @@ impl<V: Var + Display> Display for Expr<V> {
     }
 }
 
+pub(crate) fn fmt_biguint<W: Write>(f: &mut W, c: &BigUint) -> fmt::Result {
+    let c_bits = c.bits();
+    if c_bits >= 8 && c.count_ones() == 1 {
+        write!(f, "2^{}", c.trailing_zeros().unwrap())
+    } else if c_bits >= 16 {
+        write!(f, "0x{:x}", c)
+    } else {
+        write!(f, "{}", c)
+    }
+}
+
 impl<V: Var> Expr<V> {
     // sumatory terminal
     fn is_terminal(&self) -> bool {
@@ -1016,16 +1027,7 @@ impl<V: Var> Expr<V> {
                 fmt_exp(e, f, parens)?;
                 write!(f, "^{}", c)
             }
-            Const(c) => {
-                let c_bits = c.bits();
-                if c_bits >= 8 && c.count_ones() == 1 {
-                    write!(f, "2^{}", c.trailing_zeros().unwrap())
-                } else if c_bits >= 16 {
-                    write!(f, "0x{:x}", c)
-                } else {
-                    write!(f, "{}", c)
-                }
-            }
+            Const(c) => fmt_biguint(f, c),
             Var(v) => fmt_var(f, v),
             Sum(es) => {
                 for (i, e) in es.iter().enumerate() {

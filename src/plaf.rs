@@ -1,6 +1,6 @@
-use crate::expr::{self, Column, ColumnKind, ColumnQuery, Expr, PlonkVar as Var};
-use num_bigint::BigUint;
-use num_traits::Zero;
+use crate::expr::{self, fmt_biguint, Column, ColumnKind, ColumnQuery, Expr, PlonkVar as Var};
+use num_bigint::{BigInt, BigUint};
+use num_traits::{sign::Signed, Zero};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Write};
 
@@ -196,7 +196,7 @@ pub struct Plaf {
     pub copys: Vec<CopyC>,
     /// Assignment values to the fixed columns.  None is used for non-assigned values, which means
     /// a 0 value.
-    pub fixed: Vec<Vec<Option<BigUint>>>,
+    pub fixed: Vec<Vec<Option<BigInt>>>,
 }
 
 pub struct VarDisplay<'a> {
@@ -416,11 +416,16 @@ impl Plaf {
                             .rem_euclid(self.info.num_rows as i32)
                             as usize;
                         match column.kind {
-                            ColumnKind::Fixed => Expr::Const(
-                                self.fixed[column.index][offset]
+                            ColumnKind::Fixed => {
+                                let c = self.fixed[column.index][offset]
                                     .clone()
-                                    .unwrap_or_else(BigUint::zero),
-                            ),
+                                    .unwrap_or_else(BigInt::zero);
+                                if c.is_negative() {
+                                    Expr::Neg(Box::new(Expr::Const(c.magnitude().clone())))
+                                } else {
+                                    Expr::Const(c.magnitude().clone())
+                                }
+                            }
                             _ => Expr::Var(Cell {
                                 column: *column,
                                 offset,
@@ -488,7 +493,10 @@ impl Display for PlafDisplayFixedCSV<'_> {
             for col_idx in 0..this.columns.fixed.len() {
                 write!(f, ",")?;
                 if let Some(ref v) = this.fixed[col_idx][row_idx] {
-                    write!(f, "{}", v)?;
+                    if v.is_negative() {
+                        write!(f, "-")?;
+                    }
+                    fmt_biguint(f, v.magnitude())?;
                 }
             }
             writeln!(f)?;

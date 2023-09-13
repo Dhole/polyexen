@@ -1,7 +1,7 @@
 use crate::expr::{modinv, mul, neg, Expr, Var};
 use std::fmt::{self, Display};
 
-use num_bigint::{BigInt, BigUint, Sign};
+use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_traits::{cast::ToPrimitive, One, Zero};
 use std::collections::{hash_map::RandomState, HashMap, HashSet};
 
@@ -213,12 +213,21 @@ impl<V: Var> Analysis<V> {
     }
 }
 
-fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
+pub(crate) fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
     let (sign, c) = c.into_parts();
     if sign == Sign::Minus {
         p - c
     } else {
         c
+    }
+}
+
+pub(crate) fn to_bigint(c: &BigUint, p: &BigUint, max_bits: u64) -> BigInt {
+    let neg = p - c;
+    if neg.bits() <= max_bits {
+        -neg.to_bigint().expect("BigUint to BigInt")
+    } else {
+        c.to_bigint().expect("BigUint to BigInt")
     }
 }
 
