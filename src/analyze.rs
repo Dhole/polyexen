@@ -213,7 +213,7 @@ impl<V: Var> Analysis<V> {
     }
 }
 
-pub(crate) fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
+pub fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
     let (sign, c) = c.into_parts();
     if sign == Sign::Minus {
         p - c
@@ -222,7 +222,7 @@ pub(crate) fn to_biguint(c: BigInt, p: &BigUint) -> BigUint {
     }
 }
 
-pub(crate) fn to_bigint(c: &BigUint, p: &BigUint, max_bits: u64) -> BigInt {
+pub fn to_bigint(c: &BigUint, p: &BigUint, max_bits: u64) -> BigInt {
     let neg = p - c;
     if neg.bits() <= max_bits {
         -neg.to_bigint().expect("BigUint to BigInt")
