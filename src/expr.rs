@@ -951,6 +951,20 @@ impl<V: Var> Expr<V> {
             _ => false,
         }
     }
+
+    pub fn replace_var(&mut self, v: &V, replacement: &Expr<V>) {
+        use Expr::*;
+        match self {
+            Const(_) => {}
+            Var(_) => {
+                *self = replacement.clone();
+            }
+            Neg(e) => e.replace_var(v, replacement),
+            Pow(e, _) => e.replace_var(v, replacement),
+            Sum(es) => es.iter_mut().for_each(|e| e.replace_var(v, replacement)),
+            Mul(es) => es.iter_mut().for_each(|e| e.replace_var(v, replacement)),
+        }
+    }
 }
 
 pub struct ExprDisplay<'a, V: Var, T>
