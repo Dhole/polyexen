@@ -608,28 +608,28 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
 
     for i in 0..cs.num_fixed_columns() {
         let name = if i < num_fixed_columns_orig {
-            format!("f{:02}", i)
+            format!("f{:02x}", i)
         } else {
             // This should only happen when `compress_selectors = true`, otherwise
             // `num_fixed_columns_orig == cs.num_fixed_columns()`
-            format!("s{:02}", i - num_fixed_columns_orig)
+            format!("s{:02x}", i - num_fixed_columns_orig)
         };
         plaf.columns.fixed.push(ColumnFixed::new(name));
     }
     // If `compress_selectors = true`, then there should be 0 selectors in `cs`.
     for i in 0..cs.num_selectors() {
-        let name = format!("s{:02}", i);
+        let name = format!("s{:02x}", i);
         plaf.columns.fixed.push(ColumnFixed::new(name));
     }
     for i in 0..cs.num_instance_columns() {
         plaf.columns
             .public
-            .push(ColumnPublic::new(format!("i{:02}", i)));
+            .push(ColumnPublic::new(format!("i{:02x}", i)));
     }
     let column_phase = cs.advice_column_phase();
     for i in 0..cs.num_advice_columns() {
         plaf.columns.witness.push(ColumnWitness::new(
-            format!("w{:02}", i),
+            format!("w{:02x}", i),
             column_phase[i] as usize,
         ));
     }
