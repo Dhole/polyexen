@@ -24,39 +24,41 @@ pub struct PlafH2Circuit {
 
 impl PlafH2Circuit {
     pub fn instance<F: PrimeField<Repr = [u8; 32]>>(&self) -> Vec<Vec<F>> {
-        if !self.plaf.columns.public.is_empty() {
-            let mut instance_with_offsets = Vec::new();
+        let public_len = self.plaf.columns.public.len();
+        let mut instance_vec = vec![Vec::new(); public_len];
+
+        if public_len > 0 {
             for copy in &self.plaf.copys {
                 let (left_col, right_col) = &copy.columns;
 
-                let (witness_col, offsets) = match (left_col.kind, right_col.kind) {
-                    (ColumnKind::Witness, ColumnKind::Public) => (left_col, copy.offsets.clone()),
+                let (witness_col, public_col, offsets) = match (left_col.kind, right_col.kind) {
+                    (ColumnKind::Witness, ColumnKind::Public) => {
+                        (left_col, right_col, copy.offsets.clone())
+                    }
                     (ColumnKind::Public, ColumnKind::Witness) => (
                         right_col,
+                        left_col,
                         copy.offsets.iter().map(|(l, r)| (*r, *l)).collect(),
                     ),
+                    (ColumnKind::Public, _) | (_, ColumnKind::Public) => {
+                        unimplemented!("constraints between public and fixed column not supported")
+                    }
                     _ => continue,
                 };
 
                 for (witness_offset, public_offset) in offsets {
-                    instance_with_offsets.push((
-                        self.wit.witness[witness_col.index][witness_offset]
-                            .as_ref()
-                            .unwrap(),
-                        public_offset,
-                    ));
+                    if instance_vec[public_col.index].len() <= public_offset {
+                        instance_vec[public_col.index].resize(public_offset + 1, F::ZERO);
+                    }
+                    instance_vec[public_col.index][public_offset] = self.wit.witness
+                        [witness_col.index][witness_offset]
+                        .as_ref()
+                        .unwrap()
+                        .to_field();
                 }
             }
-            instance_with_offsets.sort_by_key(|&(_, offset)| offset);
-            let instance_values = instance_with_offsets
-                .iter()
-                .map(|&(val, _)| val.to_field())
-                .collect();
-
-            return vec![instance_values];
         }
-
-        Vec::new()
+        instance_vec
     }
 }
 
