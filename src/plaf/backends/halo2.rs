@@ -22,6 +22,46 @@ pub struct PlafH2Circuit {
     pub wit: Witness,
 }
 
+impl PlafH2Circuit {
+    pub fn instance<F: PrimeField<Repr = [u8; 32]>>(&self) -> Vec<Vec<F>> {
+        let public_len = self.plaf.columns.public.len();
+        let mut instance_vec = vec![Vec::new(); public_len];
+
+        if public_len > 0 {
+            for copy in &self.plaf.copys {
+                let (left_col, right_col) = &copy.columns;
+
+                let (witness_col, public_col, offsets) = match (left_col.kind, right_col.kind) {
+                    (ColumnKind::Witness, ColumnKind::Public) => {
+                        (left_col, right_col, copy.offsets.clone())
+                    }
+                    (ColumnKind::Public, ColumnKind::Witness) => (
+                        right_col,
+                        left_col,
+                        copy.offsets.iter().map(|(l, r)| (*r, *l)).collect(),
+                    ),
+                    (ColumnKind::Public, _) | (_, ColumnKind::Public) => {
+                        unimplemented!("constraints between public and fixed column not supported")
+                    }
+                    _ => continue,
+                };
+
+                for (witness_offset, public_offset) in offsets {
+                    if instance_vec[public_col.index].len() <= public_offset {
+                        instance_vec[public_col.index].resize(public_offset + 1, F::ZERO);
+                    }
+                    instance_vec[public_col.index][public_offset] = self.wit.witness
+                        [witness_col.index][witness_offset]
+                        .as_ref()
+                        .unwrap()
+                        .to_field();
+                }
+            }
+        }
+        instance_vec
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct H2Columns {
     advice: Vec<Column<Advice>>,
