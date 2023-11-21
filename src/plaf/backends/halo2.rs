@@ -1,18 +1,17 @@
 use crate::{
     analyze::to_biguint,
     expr::{self, ColumnKind, ColumnQuery, Expr, PlonkVar as Var},
+    halo2_proofs::{
+        circuit::{Cell, Layouter, RegionIndex, SimpleFloorPlanner, Value},
+        halo2curves::group::ff::{Field, PrimeField},
+        plonk::{
+            Advice, Any, Circuit, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed,
+            Instance, SecondPhase, ThirdPhase, VirtualCells,
+        },
+        poly::Rotation,
+    },
     plaf::{Plaf, Witness},
 };
-use halo2_proofs::{
-    circuit::{Cell, Layouter, RegionIndex, SimpleFloorPlanner, Value},
-    halo2curves::group::ff::{Field, PrimeField},
-    plonk::{
-        Advice, Any, Circuit, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed,
-        Instance, SecondPhase, ThirdPhase, VirtualCells,
-    },
-    poly::Rotation,
-};
-// use halo2_proofs::plonk::{Challenge as Halo2Challenge};
 use num_bigint::BigUint;
 use std::{collections::HashMap, fmt::Debug};
 
@@ -135,9 +134,18 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
     }
 }
 
+#[cfg(feature = "halo2-pse")]
 #[allow(dead_code)]
 struct _Cell {
     region_index: RegionIndex,
+    row_offset: usize,
+    column: Column<Any>,
+}
+
+#[cfg(feature = "halo2-axiom")]
+#[allow(dead_code)]
+struct _Cell {
+    // region_index: RegionIndex,
     row_offset: usize,
     column: Column<Any>,
 }
@@ -146,6 +154,7 @@ assert_eq_size!(_Cell, Cell);
 
 fn new_cell(column: Column<Any>, offset: usize) -> Cell {
     let cell = _Cell {
+        #[cfg(feature = "halo2-pse")]
         region_index: RegionIndex::from(0),
         row_offset: offset,
         column,
@@ -294,6 +303,7 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                 for (index, column) in self.plaf.fixed.iter().enumerate() {
                     for (row, value) in column.iter().enumerate() {
                         if let Some(value) = value {
+                            #[cfg(feature = "halo2-pse")]
                             region.assign_fixed::<_, F, _, _>(
                                 || "",
                                 config.columns.fixed[index],
@@ -304,6 +314,15 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                                     )
                                 },
                             )?;
+                            #[cfg(feature = "halo2-axiom")]
+                            region.assign_fixed(
+                                config.columns.fixed[index],
+                                row,
+                                <num_bigint::BigUint as ToField<F>>::to_field(&to_biguint(
+                                    value.clone(),
+                                    &self.plaf.info.p,
+                                )),
+                            );
                         }
                     }
                 }
@@ -324,22 +343,35 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                     let left_col = to_column_any(left_col);
                     let right_col = to_column_any(right_col);
                     for (left_offset, right_offset) in &copy.offsets {
+                        #[cfg(feature = "halo2-pse")]
                         region.constrain_equal(
                             new_cell(left_col, *left_offset),
                             new_cell(right_col, *right_offset),
                         )?;
+                        #[cfg(feature = "halo2-axiom")]
+                        region.constrain_equal(
+                            new_cell(left_col, *left_offset),
+                            new_cell(right_col, *right_offset),
+                        );
                     }
                 }
                 // Assign advice columns
                 for (index, column) in self.wit.witness.iter().enumerate() {
                     for (row, value) in column.iter().enumerate() {
                         if let Some(value) = value {
+                            #[cfg(feature = "halo2-pse")]
                             region.assign_advice::<_, F, _, _>(
                                 || "",
                                 config.columns.advice[index],
                                 row,
                                 || Value::known(value.to_field()),
                             )?;
+                            #[cfg(feature = "halo2-axiom")]
+                            region.assign_advice(
+                                config.columns.advice[index],
+                                row,
+                                Value::<F>::known(value.to_field()),
+                            );
                         }
                     }
                 }
@@ -371,11 +403,18 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                     witness_offset,
                 );
 
+                #[cfg(feature = "halo2-pse")]
                 layouter.constrain_instance(
                     cell,
                     *config.columns.instance.get(public_col.index).unwrap(),
                     public_offset,
                 )?;
+                #[cfg(feature = "halo2-axiom")]
+                layouter.constrain_instance(
+                    cell,
+                    *config.columns.instance.get(public_col.index).unwrap(),
+                    public_offset,
+                );
             }
         }
         Ok(())

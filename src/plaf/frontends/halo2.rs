@@ -1,23 +1,27 @@
 use crate::{
     analyze::to_bigint,
     expr::{self, get_field_p, ColumnKind, ColumnQuery, Expr, PlonkVar as Var},
+    halo2_proofs::{
+        circuit::Value,
+        halo2curves::group::ff::{Field, PrimeField},
+        plonk::{
+            Advice, Any, Assigned, Assignment, Challenge as Halo2Challenge, Circuit, Column,
+            ConstraintSystem, Error, Expression, Fixed, FixedQuery, FloorPlanner, Instance,
+            Selector,
+        },
+        poly::Rotation,
+    },
     plaf::{
         CellValue, Challenge, ColumnFixed, ColumnPublic, ColumnWitness, CopyC, Lookup, Plaf, Poly,
         Witness,
     },
 };
-use halo2_proofs::{
-    circuit::Value,
-    halo2curves::group::ff::{Field, PrimeField},
-    plonk::{
-        Advice, Any, Assigned, Assignment, Challenge as Halo2Challenge, Circuit, Column,
-        ConstraintSystem, Error, Expression, Fixed, FixedQuery, FloorPlanner, Instance, Selector,
-    },
-    poly::Rotation,
-};
 use num_bigint::{BigInt, BigUint, ToBigInt};
 use num_traits::One;
 use std::{collections::HashMap, fmt::Debug, ops::Range};
+
+#[cfg(feature = "halo2-axiom")]
+use std::sync::Arc;
 
 #[derive(Debug)]
 struct WitnessAssembly<F: Field> {
@@ -25,7 +29,10 @@ struct WitnessAssembly<F: Field> {
     // The instance cells in the circuit, arranged as [column][row].
     instance: Vec<Vec<F>>,
     // The advice cells in the circuit, arranged as [column][row].
+    #[cfg(feature = "halo2-pse")]
     advice: Vec<Vec<CellValue<F>>>,
+    #[cfg(feature = "halo2-axiom")]
+    advice: Vec<Vec<Arc<Assigned<F>>>>,
     // A range of available rows for assignment and copies.
     usable_rows: Range<usize>,
     challenges: Vec<F>,
@@ -75,6 +82,7 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
             .ok_or(Error::BoundsFailure)
     }
 
+    #[cfg(feature = "halo2-pse")]
     fn assign_advice<V, VR, A, AR>(
         &mut self,
         _: A,
@@ -112,6 +120,41 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
         Ok(())
     }
 
+    #[cfg(feature = "halo2-axiom")]
+    fn assign_advice<'v>(
+        &mut self,
+        column: Column<Advice>,
+        row: usize,
+        to: Value<Assigned<F>>,
+    ) -> Value<&'v Assigned<F>> {
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}",
+            row,
+            self.usable_rows
+        );
+        let cell = self
+            .advice
+            .get_mut(column.index())
+            .and_then(|v| v.get_mut(row))
+            .ok_or(Error::BoundsFailure)
+            .unwrap();
+
+        let mut known = false;
+        let value_ref = to.map(|f| {
+            known = true;
+            let val = Arc::new(f);
+            let val_ref = Arc::downgrade(&val);
+            *cell = val;
+            unsafe { &*val_ref.as_ptr() }
+        });
+        if !known {
+            panic!("{:?}", Error::Synthesis);
+        }
+        value_ref
+    }
+
+    #[cfg(feature = "halo2-pse")]
     fn assign_fixed<V, VR, A, AR>(
         &mut self,
         _: A,
@@ -128,6 +171,10 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
         Ok(())
     }
 
+    #[cfg(feature = "halo2-axiom")]
+    fn assign_fixed<'v>(&mut self, _column: Column<Fixed>, _row: usize, _to: Assigned<F>) {}
+
+    #[cfg(feature = "halo2-pse")]
     fn copy(
         &mut self,
         _left_column: Column<Any>,
@@ -136,6 +183,16 @@ impl<F: Field> Assignment<F> for WitnessAssembly<F> {
         _right_row: usize,
     ) -> Result<(), Error> {
         Ok(())
+    }
+
+    #[cfg(feature = "halo2-axiom")]
+    fn copy(
+        &mut self,
+        _left_column: Column<Any>,
+        _left_row: usize,
+        _right_column: Column<Any>,
+        _right_row: usize,
+    ) {
     }
 
     fn fill_from_row(
@@ -229,6 +286,7 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         Ok(Value::unknown())
     }
 
+    #[cfg(feature = "halo2-pse")]
     fn assign_advice<V, VR, A, AR>(
         &mut self,
         _: A,
@@ -246,6 +304,18 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         Ok(())
     }
 
+    #[cfg(feature = "halo2-axiom")]
+    fn assign_advice<'v>(
+        &mut self,
+        _: Column<Advice>,
+        _: usize,
+        _: Value<Assigned<F>>,
+    ) -> Value<&'v Assigned<F>> {
+        // We only care about fixed columns here
+        Default::default()
+    }
+
+    #[cfg(feature = "halo2-pse")]
     fn assign_fixed<V, VR, A, AR>(
         &mut self,
         _: A,
@@ -284,6 +354,26 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         Ok(())
     }
 
+    #[cfg(feature = "halo2-axiom")]
+    fn assign_fixed(&mut self, column: Column<Fixed>, row: usize, to: Assigned<F>) {
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}",
+            row,
+            self.usable_rows
+        );
+
+        let cell = self
+            .fixed
+            .get_mut(column.index())
+            .and_then(|v| v.get_mut(row))
+            .ok_or(Error::BoundsFailure)
+            .unwrap();
+
+        *cell = CellValue::Assigned(to.evaluate());
+    }
+
+    #[cfg(feature = "halo2-pse")]
     fn copy(
         &mut self,
         left_column: Column<Any>,
@@ -308,6 +398,30 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         Ok(())
     }
 
+    #[cfg(feature = "halo2-axiom")]
+    fn copy(
+        &mut self,
+        left_column: Column<Any>,
+        left_row: usize,
+        right_column: Column<Any>,
+        right_row: usize,
+    ) {
+        assert!(
+            self.usable_rows.contains(&left_row) && self.usable_rows.contains(&right_row),
+            "left_row={}, right_row={}, usable_rows={:?}",
+            left_row,
+            right_row,
+            self.usable_rows
+        );
+
+        // TODO: Sort columns
+        let columns = self
+            .copies
+            .entry((left_column.clone(), right_column.clone()))
+            .or_insert_with(|| Vec::new());
+        columns.push((left_row, right_row));
+    }
+
     fn fill_from_row(
         &mut self,
         column: Column<Fixed>,
@@ -322,7 +436,12 @@ impl<F: Field> Assignment<F> for Assembly<F> {
         );
 
         for row in self.usable_rows.clone().skip(from_row) {
+            #[cfg(feature = "halo2-pse")]
             self.assign_fixed(|| "", column, row, || to)?;
+            #[cfg(feature = "halo2-axiom")]
+            to.map(|v| {
+                self.assign_fixed(column, row, v);
+            });
         }
 
         Ok(())
@@ -378,7 +497,10 @@ pub fn gen_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    #[cfg(feature = "halo2-pse")]
     let advice = vec![vec![CellValue::Unassigned; n]; cs.num_advice_columns()];
+    #[cfg(feature = "halo2-axiom")]
+    let advice = vec![vec![Arc::new(Assigned::Zero); n]; cs.num_advice_columns()];
 
     let mut assembly: WitnessAssembly<F> = WitnessAssembly {
         // k,
@@ -402,7 +524,12 @@ pub fn gen_witness<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circ
     for i in 0..plaf.columns.witness.len() {
         let column = &mut witness.witness[i];
         for (j, cell) in assembly.advice[i].iter().enumerate() {
+            #[cfg(feature = "halo2-pse")]
             if let CellValue::Assigned(v) = cell {
+                column[j] = Some(BigUint::from_bytes_le(&v.to_repr()[..]));
+            }
+            #[cfg(feature = "halo2-axiom")]
+            if let Assigned::Trivial(v) = cell.as_ref() {
                 column[j] = Some(BigUint::from_bytes_le(&v.to_repr()[..]));
             }
         }

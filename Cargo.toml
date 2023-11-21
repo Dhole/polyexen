@@ -18,9 +18,17 @@ pest_derive = "2.4"
 lazy_static = "1.4"
 # Uncomment with the next release
 # halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", features = ["circuit-params"], tag = "v2023_04_20" }
-halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", features = ["circuit-params"], rev = "d3746109d7d38be53afc8ddae8fdfaf1f02ad1d7" }
+# halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", features = ["circuit-params"], rev = "d3746109d7d38be53afc8ddae8fdfaf1f02ad1d7" }
+halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", rev = "d3746109d7d38be53afc8ddae8fdfaf1f02ad1d7", optional = true }
+halo2-axiom = { git = "https://github.com/axiom-crypto/halo2.git", optional = true }
 log = "0.4.14"
 static_assertions = "1.1.0"
 
 # [patch."https://github.com/privacy-scaling-explorations/halo2.git"]
 # halo2_proofs = { path = "../halo2/halo2_proofs" }
+
+[features]
+# default = [ "halo2-pse" ]
+default = [ "halo2-axiom" ]
+halo2-pse = ["halo2_proofs/circuit-params"]
+halo2-axiom = ["dep:halo2-axiom"]

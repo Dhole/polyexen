@@ -1,15 +1,17 @@
 use crate::expr::{self, fmt_biguint, Column, ColumnKind, ColumnQuery, Expr, PlonkVar as Var};
 use num_bigint::{BigInt, BigUint};
 use num_traits::{sign::Signed, Zero};
-use std::collections::HashMap;
-use std::fmt::{self, Debug, Display, Write};
+use std::{
+    collections::HashMap,
+    fmt::{self, Debug, Display, Write},
+};
 
 pub mod backends;
 pub mod frontends;
 
 /// The value of a particular cell within the circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CellValue<F> {
+pub(crate) enum CellValue<F> {
     // An unassigned cell.
     Unassigned,
     // A cell that has been assigned a value.

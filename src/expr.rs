@@ -1,4 +1,4 @@
-use halo2_proofs::{
+use crate::halo2_proofs::{
     halo2curves::group::ff::{Field, PrimeField},
     plonk::Expression,
 };
