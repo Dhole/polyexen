@@ -100,7 +100,7 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
                 Var::Query(ColumnQuery {
                     column: expr::Column { kind, index },
                     rotation,
-                }) => queries.get(meta, columns, *kind, *index, *rotation),
+                }) => queries.get(meta, columns, *kind, *index as usize, *rotation),
                 Var::Challenge { index: _, phase: _ } => {
                     // FIXME: Figure out a way to use challenges
                     // meta.query_challenge(columns.challenges[*index])
@@ -209,9 +209,9 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
 
         let to_column_any = |col: &expr::Column| -> Column<Any> {
             match col.kind {
-                ColumnKind::Witness => advice_columns[col.index].into(),
-                ColumnKind::Public => instance_columns[col.index].into(),
-                ColumnKind::Fixed => fixed_columns[col.index].into(),
+                ColumnKind::Witness => advice_columns[col.index()].into(),
+                ColumnKind::Public => instance_columns[col.index()].into(),
+                ColumnKind::Fixed => fixed_columns[col.index()].into(),
             }
         };
 
@@ -328,9 +328,9 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
                 }
                 let to_column_any = |col: &expr::Column| -> Column<Any> {
                     match col.kind {
-                        ColumnKind::Witness => config.columns.advice[col.index].into(),
-                        ColumnKind::Public => config.columns.instance[col.index].into(),
-                        ColumnKind::Fixed => config.columns.fixed[col.index].into(),
+                        ColumnKind::Witness => config.columns.advice[col.index()].into(),
+                        ColumnKind::Public => config.columns.instance[col.index()].into(),
+                        ColumnKind::Fixed => config.columns.fixed[col.index()].into(),
                     }
                 };
                 // Set copy constraints
@@ -399,20 +399,20 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
             };
             for (witness_offset, public_offset) in offsets {
                 let cell = new_cell(
-                    (*config.columns.advice.get(witness_col.index).unwrap()).into(),
+                    (*config.columns.advice.get(witness_col.index()).unwrap()).into(),
                     witness_offset,
                 );
 
                 #[cfg(feature = "halo2-pse")]
                 layouter.constrain_instance(
                     cell,
-                    *config.columns.instance.get(public_col.index).unwrap(),
+                    *config.columns.instance.get(public_col.index()).unwrap(),
                     public_offset,
                 )?;
                 #[cfg(feature = "halo2-axiom")]
                 layouter.constrain_instance(
                     cell,
-                    *config.columns.instance.get(public_col.index).unwrap(),
+                    *config.columns.instance.get(public_col.index()).unwrap(),
                     public_offset,
                 );
             }

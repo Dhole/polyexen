@@ -544,21 +544,21 @@ pub fn expression_to_var<F: Field>(e: &Expression<F>) -> Option<Var> {
         Expression::Fixed(q) => Some(Query(ColumnQuery {
             column: expr::Column {
                 kind: ColumnKind::Fixed,
-                index: q.column_index(),
+                index: q.column_index() as u16,
             },
             rotation: q.rotation().0,
         })),
         Expression::Advice(q) => Some(Query(ColumnQuery {
             column: expr::Column {
                 kind: ColumnKind::Witness,
-                index: q.column_index(),
+                index: q.column_index() as u16,
             },
             rotation: q.rotation().0,
         })),
         Expression::Instance(q) => Some(Query(ColumnQuery {
             column: expr::Column {
                 kind: ColumnKind::Public,
-                index: q.column_index(),
+                index: q.column_index() as u16,
             },
             rotation: q.rotation().0,
         })),
@@ -743,10 +743,13 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
         };
         plaf.columns.fixed.push(ColumnFixed::new(name));
     }
-    // If `compress_selectors = true`, then there should be 0 selectors in `cs`.
-    for i in 0..cs.num_selectors() {
-        let name = format!("s{:02x}", i);
-        plaf.columns.fixed.push(ColumnFixed::new(name));
+    // If `compress_selectors = true`, then all selectors are already accounted for via fixed
+    // columns.
+    if !compress_selectors {
+        for i in 0..cs.num_selectors() {
+            let name = format!("s{:02x}", i);
+            plaf.columns.fixed.push(ColumnFixed::new(name));
+        }
     }
     for i in 0..cs.num_instance_columns() {
         plaf.columns
@@ -860,11 +863,11 @@ pub fn get_plaf<F: Field + PrimeField<Repr = [u8; 32]>, ConcreteCircuit: Circuit
             columns: (
                 expr::Column {
                     kind: column_any_to_kind(col_a.column_type()),
-                    index: col_a.index(),
+                    index: col_a.index() as u16,
                 },
                 expr::Column {
                     kind: column_any_to_kind(col_b.column_type()),
-                    index: col_b.index(),
+                    index: col_b.index() as u16,
                 },
             ),
             offsets,

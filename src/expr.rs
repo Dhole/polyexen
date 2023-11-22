@@ -57,7 +57,19 @@ pub enum ColumnKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     pub kind: ColumnKind,
-    pub index: usize,
+    pub index: u16,
+}
+
+impl Column {
+    pub fn new(kind: ColumnKind, index: usize) -> Self {
+        Self {
+            kind,
+            index: index as u16,
+        }
+    }
+    pub fn index(&self) -> usize {
+        self.index as usize
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -112,21 +124,21 @@ impl<F: PrimeField<Repr = [u8; 32]>> From<&Expression<F>> for Expr<PlonkVar> {
             Fixed(query) => Expr::Var(PlonkVar::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Fixed,
-                    index: query.column_index(),
+                    index: query.column_index() as u16,
                 },
                 rotation: query.rotation().0,
             })),
             Advice(query) => Expr::Var(PlonkVar::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Witness,
-                    index: query.column_index(),
+                    index: query.column_index() as u16,
                 },
                 rotation: query.rotation().0,
             })),
             Instance(query) => Expr::Var(PlonkVar::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Public,
-                    index: query.column_index(),
+                    index: query.column_index() as u16,
                 },
                 rotation: query.rotation().0,
             })),

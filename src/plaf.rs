@@ -227,7 +227,19 @@ impl Display for VarDisplay<'_> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Cell {
     pub column: Column,
-    pub offset: usize,
+    pub offset: u32,
+}
+
+impl Cell {
+    pub fn new(column: Column, offset: usize) -> Self {
+        Self {
+            column,
+            offset: offset as u32,
+        }
+    }
+    pub fn offset(&self) -> usize {
+        self.offset as usize
+    }
 }
 
 impl expr::Var for Cell {}
@@ -275,9 +287,9 @@ impl Plaf {
             f,
             "{}",
             match c.kind {
-                Witness => self.columns.witness[c.index].name(),
-                Public => self.columns.public[c.index].name(),
-                Fixed => self.columns.fixed[c.index].name(),
+                Witness => self.columns.witness[c.index()].name(),
+                Public => self.columns.public[c.index()].name(),
+                Fixed => self.columns.fixed[c.index()].name(),
             }
         )
     }
@@ -336,7 +348,7 @@ impl Plaf {
             let var = Var::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Witness,
-                    index,
+                    index: index as u16,
                 },
                 rotation: 0,
             });
@@ -349,7 +361,7 @@ impl Plaf {
             let var = Var::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Fixed,
-                    index,
+                    index: index as u16,
                 },
                 rotation: 0,
             });
@@ -362,7 +374,7 @@ impl Plaf {
             let var = Var::Query(ColumnQuery {
                 column: Column {
                     kind: ColumnKind::Public,
-                    index,
+                    index: index as u16,
                 },
                 rotation: 0,
             });
@@ -419,7 +431,7 @@ impl Plaf {
                             as usize;
                         match column.kind {
                             ColumnKind::Fixed => {
-                                let c = self.fixed[column.index][offset]
+                                let c = self.fixed[column.index()][offset]
                                     .clone()
                                     .unwrap_or_else(BigInt::zero);
                                 if c.is_negative() {
@@ -428,10 +440,7 @@ impl Plaf {
                                     Expr::Const(c.magnitude().clone())
                                 }
                             }
-                            _ => Expr::Var(Cell {
-                                column: *column,
-                                offset,
-                            }),
+                            _ => Expr::Var(Cell::new(*column, offset)),
                         }
                     }
                     expr::PlonkVar::Challenge { index: _, phase: _ } => {
@@ -453,7 +462,7 @@ impl Plaf {
                 let Cell { column, offset } = v;
                 match column.kind {
                     ColumnKind::Witness => {
-                        if let Some(f) = &witness.witness[column.index][*offset] {
+                        if let Some(f) = &witness.witness[column.index()][*offset as usize] {
                             Const(f.clone())
                         } else {
                             e.clone()
