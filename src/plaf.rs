@@ -568,7 +568,7 @@ impl Display for PlafDisplayBaseTOML<'_> {
                 .fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &Var| {
                     this.fmt_var(f, v)
                 })?;
-            writeln!(f, "\"")?;
+            writeln!(f, "\"\n")?;
         }
         writeln!(f)?;
 
@@ -587,7 +587,7 @@ impl Display for PlafDisplayBaseTOML<'_> {
                 })?;
                 writeln!(f, "\"],")?;
             }
-            writeln!(f, "]")?;
+            writeln!(f, "]\n")?;
         }
         writeln!(f)?;
 
@@ -598,11 +598,19 @@ impl Display for PlafDisplayBaseTOML<'_> {
             write!(f, "\", \"")?;
             this.fmt_column(f, &c.columns.1)?;
             writeln!(f, "\"]")?;
-            writeln!(f, "offsets = [")?;
+            // writeln!(f, "offsets = [")?;
+            // for (a, b) in &c.offsets {
+            //     writeln!(f, " [{}, {}],", a, b)?;
+            // }
+            writeln!(f, "cells = [")?;
             for (a, b) in &c.offsets {
-                writeln!(f, " [{}, {}],", a, b)?;
+                write!(f, " [\"")?;
+                this.fmt_column(f, &c.columns.0)?;
+                write!(f, "[{}]\", \"", a)?;
+                this.fmt_column(f, &c.columns.1)?;
+                writeln!(f, "[{}]\"],", b)?;
             }
-            writeln!(f, "]")?;
+            writeln!(f, "]\n")?;
         }
         writeln!(f)?;
 
