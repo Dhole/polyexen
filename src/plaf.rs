@@ -176,7 +176,7 @@ pub struct Info {
     pub p: BigUint,
     /// Number of rows.  This is always a power of 2 in halo2.
     pub num_rows: usize,
-    /// List of challenges used.  The challange API is a proving system extension applied to pse's
+    /// List of challenges used.  The challenge API is a proving system extension applied to pse's
     /// fork of halo2: https://github.com/privacy-scaling-explorations/halo2/pull/97
     pub challenges: Vec<Challenge>,
 }
@@ -302,9 +302,9 @@ impl Plaf {
             }
         }
     }
-    pub fn set_challange_alias(&mut self, index: usize, name: String) -> bool {
-        if let Some(mut challange) = self.info.challenges.get_mut(index) {
-            challange.alias = Some(name);
+    pub fn set_challenge_alias(&mut self, index: usize, name: String) -> bool {
+        if let Some(challenge) = self.info.challenges.get_mut(index) {
+            challenge.alias = Some(name);
             true
         } else {
             false
