@@ -155,6 +155,13 @@ pub struct Lookup {
     pub exps: (Vec<Expr<Var>>, Vec<Expr<Var>>),
 }
 
+/// Shuffle constraint
+#[derive(Debug, Clone)]
+pub struct Shuffle {
+    pub name: String,
+    pub exps: (Vec<Expr<Var>>, Vec<Expr<Var>>),
+}
+
 /// Copy Constraint
 #[derive(Debug, Clone)]
 pub struct CopyC {
@@ -169,7 +176,7 @@ pub struct Info {
     pub p: BigUint,
     /// Number of rows.  This is always a power of 2 in halo2.
     pub num_rows: usize,
-    /// List of challenges used.  The challange API is a proving system extension applied to pse's
+    /// List of challenges used.  The challenge API is a proving system extension applied to pse's
     /// fork of halo2: https://github.com/privacy-scaling-explorations/halo2/pull/97
     pub challenges: Vec<Challenge>,
 }
@@ -192,6 +199,8 @@ pub struct Plaf {
     pub metadata: Metadata,
     /// List of lookup constraints
     pub lookups: Vec<Lookup>,
+    /// List of shuffle constraints
+    pub shuffles: Vec<Shuffle>,
     /// List of copy constraints
     pub copys: Vec<CopyC>,
     /// Assignment values to the fixed columns.  None is used for non-assigned values, which means
@@ -293,16 +302,16 @@ impl Plaf {
             }
         }
     }
-    pub fn set_challange_alias(&mut self, index: usize, name: String) -> bool {
-        if let Some(mut challange) = self.info.challenges.get_mut(index) {
-            challange.alias = Some(name);
+    pub fn set_challenge_alias(&mut self, index: usize, name: String) -> bool {
+        if let Some(challenge) = self.info.challenges.get_mut(index) {
+            challenge.alias = Some(name);
             true
         } else {
             false
         }
     }
 
-    /// Simplify expressions in polynomial constraints and lookups.
+    /// Simplify expressions in polynomial constraints, shuffles and lookups.
     pub fn simplify(&mut self) {
         let p = &self.info.p;
         // Polynomial Expressions
@@ -311,6 +320,13 @@ impl Plaf {
         }
         // Lookups
         for lookup in self.lookups.iter_mut() {
+            for (lhs, rhs) in lookup.exps.0.iter_mut().zip(lookup.exps.1.iter_mut()) {
+                lhs.simplify(p);
+                rhs.simplify(p);
+            }
+        }
+        // Shuffles
+        for lookup in self.shuffles.iter_mut() {
             for (lhs, rhs) in lookup.exps.0.iter_mut().zip(lookup.exps.1.iter_mut()) {
                 lhs.simplify(p);
                 rhs.simplify(p);
@@ -555,6 +571,25 @@ impl Display for PlafDisplayBaseTOML<'_> {
 
         for l in &this.lookups {
             writeln!(f, "[constraints.lookups.\"{}\"]", l.name)?;
+            writeln!(f, "l = [")?;
+            for (lhs, rhs) in l.exps.0.iter().zip(l.exps.1.iter()) {
+                write!(f, "  [\"")?;
+                lhs.fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &Var| {
+                    this.fmt_var(f, v)
+                })?;
+                writeln!(f, "\",")?;
+                write!(f, "   \"")?;
+                rhs.fmt_ascii(f, &mut |f: &mut fmt::Formatter<'_>, v: &Var| {
+                    this.fmt_var(f, v)
+                })?;
+                writeln!(f, "\"],")?;
+            }
+            writeln!(f, "]")?;
+        }
+        writeln!(f)?;
+
+        for l in &this.shuffles {
+            writeln!(f, "[constraints.shuffles.\"{}\"]", l.name)?;
             writeln!(f, "l = [")?;
             for (lhs, rhs) in l.exps.0.iter().zip(l.exps.1.iter()) {
                 write!(f, "  [\"")?;
