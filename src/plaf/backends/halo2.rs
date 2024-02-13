@@ -6,12 +6,11 @@ use halo2_proofs::{
     circuit::{Cell, Layouter, RegionIndex, SimpleFloorPlanner, Value},
     halo2curves::group::ff::{Field, PrimeField},
     plonk::{
-        Advice, Any, Circuit, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed,
-        Instance, SecondPhase, ThirdPhase, VirtualCells,
+        Advice, Any, Challenge as Halo2Challenge, Circuit, Column, ConstraintSystem, Error,
+        Expression, FirstPhase, Fixed, Instance, SecondPhase, ThirdPhase, VirtualCells,
     },
     poly::Rotation,
 };
-// use halo2_proofs::plonk::{Challenge as Halo2Challenge};
 use num_bigint::BigUint;
 use std::{collections::HashMap, fmt::Debug};
 
@@ -67,7 +66,7 @@ pub struct H2Columns {
     advice: Vec<Column<Advice>>,
     fixed: Vec<Column<Fixed>>,
     instance: Vec<Column<Instance>>,
-    // challenges: Vec<Halo2Challenge>,
+    challenges: Vec<Halo2Challenge>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,10 +140,16 @@ impl<F: PrimeField<Repr = [u8; 32]>> ToHalo2Expr<F> for Expr<Var> {
                     column: expr::Column { kind, index },
                     rotation,
                 }) => queries.get(meta, columns, *kind, *index, *rotation),
-                Var::Challenge { index: _, phase: _ } => {
-                    // FIXME: Figure out a way to use challenges
-                    // meta.query_challenge(columns.challenges[*index])
-                    Constant(F::from(0x100))
+                Var::Challenge { index, phase } => {
+                    let challenge = columns.challenges[*index];
+                    assert_eq!(
+                        challenge.phase() as usize,
+                        *phase,
+                        "challenge phase in expression is {}, but in Plaf info it's {}",
+                        *phase,
+                        challenge.phase()
+                    );
+                    meta.query_challenge(challenge)
                 }
             },
             Expr::Sum(es) => {
@@ -251,20 +256,20 @@ impl<F: PrimeField<Repr = [u8; 32]>> Circuit<F> for PlafH2Circuit {
             meta.enable_equality(to_column_any(&copy.columns.1));
         }
 
-        // let mut challenges = Vec::new();
-        // for challenge in &self.plaf.info.challenges {
-        //     challenges.push(match challenge.phase {
-        //         0 => meta.challenge_usable_after(FirstPhase),
-        //         1 => meta.challenge_usable_after(SecondPhase),
-        //         2 => meta.challenge_usable_after(ThirdPhase),
-        //         p => panic!("Challenge phase {} not supported", p),
-        //     });
-        // }
+        let mut challenges = Vec::new();
+        for challenge in &plaf.info.challenges {
+            challenges.push(match challenge.phase {
+                0 => meta.challenge_usable_after(FirstPhase),
+                1 => meta.challenge_usable_after(SecondPhase),
+                2 => meta.challenge_usable_after(ThirdPhase),
+                p => panic!("Challenge phase {} not supported", p),
+            });
+        }
         let columns = H2Columns {
             advice: advice_columns,
             fixed: fixed_columns,
             instance: instance_columns,
-            // challenges,
+            challenges,
         };
 
         // Name columns for lookups
